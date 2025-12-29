@@ -10,7 +10,9 @@ import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
 
@@ -18,7 +20,6 @@ public class StateMachineGenerator {
     private final ProcessingEnvironment processingEnv;
     private final Element element;
 
-    private final ClassName stateClassName;
     private final ClassName stateMachineClassName;
     private final ClassName stateManagerClassName;
     private final ClassName stateFromClassName;
@@ -29,7 +30,7 @@ public class StateMachineGenerator {
         this.processingEnv = processingEnv;
         this.element = element;
 
-        stateClassName = (ClassName) ClassName.get(element.asType());
+        ClassName stateClassName = (ClassName) ClassName.get(element.asType());
         String simpleStateName = stateClassName.simpleName();
         stateMachineClassName = stateClassName.peerClass(simpleStateName + "StateMachine");
         stateManagerClassName = stateMachineClassName.nestedClass(simpleStateName + "StateManager");
@@ -104,12 +105,6 @@ public class StateMachineGenerator {
         generateStateMachineClass(internalStateManager);
     }
 
-    /*
-    TODO:
-    - transitionWhenMap needs to understand what we're transitioning to and support multiple BooleanSuppliers
-    - After that, we need to modify transitionWhen and poll to handle that new change
-     */
-
     private TypeSpec createInternalStateManager() {
         MethodSpec whenMethod = MethodSpec
                 .methodBuilder("transitionWhen")
@@ -117,7 +112,15 @@ public class StateMachineGenerator {
                 .addParameter(stateType, "fromState")
                 .addParameter(stateType, "toState")
                 .addParameter(BooleanSupplier.class, "booleanSupplier")
-                .addStatement("$T.this.transitionWhenMap.put(fromState, booleanSupplier)", stateMachineClassName)
+                .beginControlFlow("if(!$T.this.transitionWhenMap.containsKey(fromState))", stateMachineClassName)
+                .addStatement("$T.this.transitionWhenMap.put(fromState, new $T<>())", stateMachineClassName, HashMap.class)
+                .endControlFlow()
+                .addStatement("var fromStateMap = $T.this.transitionWhenMap.get(fromState)", stateMachineClassName)
+                .beginControlFlow("if(!fromStateMap.containsKey(toState))")
+                .addStatement("fromStateMap.put(toState, new $T<>())", ArrayList.class)
+                .endControlFlow()
+                .addStatement("var toStateMap = fromStateMap.get(toState)")
+                .addStatement("toStateMap.add(booleanSupplier)")
                 .build();
 
         return TypeSpec
@@ -237,10 +240,18 @@ public class StateMachineGenerator {
                 .builder(stateType, "currentState")
                 .build();
 
+        ParameterizedTypeName booleanSupplierList = ParameterizedTypeName.get(
+                List.class,
+                BooleanSupplier.class
+        );
         var transitionMapType = ParameterizedTypeName.get(
                 ClassName.get(Map.class),
                 stateType,
-                TypeName.get(BooleanSupplier.class)
+                ParameterizedTypeName.get(
+                        ClassName.get(Map.class),
+                        stateType,
+                        booleanSupplierList
+                )
         );
         FieldSpec transitionWhenMap = FieldSpec
                 .builder(transitionMapType, "transitionWhenMap")
@@ -276,14 +287,36 @@ public class StateMachineGenerator {
                         stateFromClassName)
                 .build();
 
+        ParameterizedTypeName toMapEntry = ParameterizedTypeName.get(
+                ClassName.get(Map.Entry.class),
+                stateType,
+                booleanSupplierList
+        );
+
         MethodSpec pollMethod = MethodSpec
                 .methodBuilder("poll")
                 .addModifiers(Modifier.PUBLIC)
                 .beginControlFlow("if (transitionWhenMap.containsKey(currentState))")
-                .addStatement("var supplier = transitionWhenMap.get(currentState)")
-                .beginControlFlow("if(supplier.getAsBoolean())")
-                .addStatement("currentState = BasicEnum.STATE_B")
-                .endControlFlow()
+                .addCode(CodeBlock
+                        .builder()
+                        .addStatement("var toMap = transitionWhenMap.get(currentState)")
+                        .beginControlFlow("for(var entry : toMap.entrySet())")
+                        .addStatement("var toState = entry.getKey()")
+                        .add(CodeBlock
+                                .builder()
+                                .beginControlFlow("for(var supplier : toMap.get(toState))")
+                                .add(CodeBlock
+                                        .builder()
+                                        .beginControlFlow("if (supplier.getAsBoolean())")
+                                        .addStatement("this.currentState = entry.getKey()")
+                                        .endControlFlow()
+                                        .build())
+                                .endControlFlow()
+                                .build()
+                        )
+                        .endControlFlow()
+                        .build()
+                )
                 .endControlFlow()
                 .build();
 
