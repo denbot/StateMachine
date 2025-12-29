@@ -1,6 +1,7 @@
 package bot.den.state;
 
 import com.palantir.javapoet.*;
+import edu.wpi.first.wpilibj2.command.Command;
 
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.lang.model.element.*;
@@ -123,9 +124,18 @@ public class StateMachineGenerator {
                 .addStatement("toStateMap.add(booleanSupplier)")
                 .build();
 
+        MethodSpec runMethod = MethodSpec
+                .methodBuilder("run")
+                .addModifiers(Modifier.PUBLIC)
+                .addParameter(stateType, "fromState")
+                .addParameter(stateType, "toState")
+                .addParameter(Command.class, "command")
+                .build();
+
         return TypeSpec
                 .classBuilder(stateManagerClassName)
                 .addMethod(whenMethod)
+                .addMethod(runMethod)
                 .build();
     }
 
@@ -160,11 +170,33 @@ public class StateMachineGenerator {
                 .methodBuilder("transitionWhen")
                 .addModifiers(Modifier.PUBLIC)
                 .addParameter(BooleanSupplier.class, "booleanSupplier")
+                .returns(stateToClassName)
                 .addStatement("""
                         this.manager.transitionWhen(
                         this.fromState,
                         this.toState,
                         booleanSupplier
+                        )"""
+                )
+                .addStatement("return this")
+                .build();
+
+        MethodSpec alwaysMethod = MethodSpec
+                .methodBuilder("always")
+                .addModifiers(Modifier.PUBLIC)
+                .returns(stateToClassName)
+                .addStatement("return transitionWhen(() -> true)")
+                .build();
+
+        MethodSpec runMethod = MethodSpec
+                .methodBuilder("run")
+                .addModifiers(Modifier.PUBLIC)
+                .addParameter(Command.class, "command")
+                .addStatement("""
+                        this.manager.run(
+                        this.fromState,
+                        this.toState,
+                        command
                         )"""
                 )
                 .build();
@@ -177,6 +209,8 @@ public class StateMachineGenerator {
                 .addField(toStateField)
                 .addMethod(constructor)
                 .addMethod(whenMethod)
+                .addMethod(alwaysMethod)
+                .addMethod(runMethod)
                 .build();
 
         writeType(type);
@@ -238,19 +272,19 @@ public class StateMachineGenerator {
 
         FieldSpec currentStateField = FieldSpec
                 .builder(stateType, "currentState")
+                .addModifiers(Modifier.PRIVATE)
                 .build();
 
-        ParameterizedTypeName booleanSupplierList = ParameterizedTypeName.get(
-                List.class,
-                BooleanSupplier.class
-        );
         var transitionMapType = ParameterizedTypeName.get(
                 ClassName.get(Map.class),
                 stateType,
                 ParameterizedTypeName.get(
                         ClassName.get(Map.class),
                         stateType,
-                        booleanSupplierList
+                        ParameterizedTypeName.get(
+                                List.class,
+                                BooleanSupplier.class
+                        )
                 )
         );
         FieldSpec transitionWhenMap = FieldSpec
@@ -286,12 +320,6 @@ public class StateMachineGenerator {
                                 state)""",
                         stateFromClassName)
                 .build();
-
-        ParameterizedTypeName toMapEntry = ParameterizedTypeName.get(
-                ClassName.get(Map.Entry.class),
-                stateType,
-                booleanSupplierList
-        );
 
         MethodSpec pollMethod = MethodSpec
                 .methodBuilder("poll")
