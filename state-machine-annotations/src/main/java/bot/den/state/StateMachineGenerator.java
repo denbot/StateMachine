@@ -130,6 +130,15 @@ public class StateMachineGenerator {
                 .addParameter(stateType, "fromState")
                 .addParameter(stateType, "toState")
                 .addParameter(Command.class, "command")
+                .beginControlFlow("if(!$T.this.transitionCommandMap.containsKey(fromState))", stateMachineClassName)
+                .addStatement("$T.this.transitionCommandMap.put(fromState, new $T<>())", stateMachineClassName, HashMap.class)
+                .endControlFlow()
+                .addStatement("var fromStateMap = $T.this.transitionCommandMap.get(fromState)", stateMachineClassName)
+                .beginControlFlow("if(!fromStateMap.containsKey(toState))")
+                .addStatement("fromStateMap.put(toState, new $T<>())", ArrayList.class)
+                .endControlFlow()
+                .addStatement("var toStateMap = fromStateMap.get(toState)")
+                .addStatement("toStateMap.add(command)")
                 .build();
 
         return TypeSpec
@@ -275,7 +284,7 @@ public class StateMachineGenerator {
                 .addModifiers(Modifier.PRIVATE)
                 .build();
 
-        var transitionMapType = ParameterizedTypeName.get(
+        var transitionWhenMapType = ParameterizedTypeName.get(
                 ClassName.get(Map.class),
                 stateType,
                 ParameterizedTypeName.get(
@@ -288,7 +297,24 @@ public class StateMachineGenerator {
                 )
         );
         FieldSpec transitionWhenMap = FieldSpec
-                .builder(transitionMapType, "transitionWhenMap")
+                .builder(transitionWhenMapType, "transitionWhenMap")
+                .addModifiers(Modifier.PRIVATE)
+                .build();
+
+        var transitionCommandMapType = ParameterizedTypeName.get(
+                ClassName.get(Map.class),
+                stateType,
+                ParameterizedTypeName.get(
+                        ClassName.get(Map.class),
+                        stateType,
+                        ParameterizedTypeName.get(
+                                List.class,
+                                Command.class
+                        )
+                )
+        );
+        FieldSpec transitionCommandMap = FieldSpec
+                .builder(transitionCommandMapType, "transitionCommandMap")
                 .addModifiers(Modifier.PRIVATE)
                 .build();
 
@@ -298,6 +324,7 @@ public class StateMachineGenerator {
                 .addParameter(stateType, "initialState")
                 .addStatement("this.currentState = initialState")
                 .addStatement("this.transitionWhenMap = new $T<>()", HashMap.class)
+                .addStatement("this.transitionCommandMap = new $T<>()", HashMap.class)
                 .addStatement("this.manager = new $T()", stateManagerClassName)
                 .build();
 
@@ -324,6 +351,7 @@ public class StateMachineGenerator {
         MethodSpec pollMethod = MethodSpec
                 .methodBuilder("poll")
                 .addModifiers(Modifier.PUBLIC)
+                .addStatement("$T nextState = null", stateType)
                 .beginControlFlow("if (transitionWhenMap.containsKey(currentState))")
                 .addCode(CodeBlock
                         .builder()
@@ -336,7 +364,7 @@ public class StateMachineGenerator {
                                 .add(CodeBlock
                                         .builder()
                                         .beginControlFlow("if (supplier.getAsBoolean())")
-                                        .addStatement("this.currentState = entry.getKey()")
+                                        .addStatement("nextState = entry.getKey()")
                                         .endControlFlow()
                                         .build())
                                 .endControlFlow()
@@ -346,6 +374,27 @@ public class StateMachineGenerator {
                         .build()
                 )
                 .endControlFlow()
+
+                .beginControlFlow("if (transitionCommandMap.containsKey(currentState))")
+                .addCode(CodeBlock
+                        .builder()
+                        .addStatement("var toMap = transitionCommandMap.get(currentState)")
+                        .beginControlFlow("if(toMap.containsKey(nextState))")
+                        .add(CodeBlock
+                                .builder()
+                                .addStatement("var commands = toMap.get(nextState)")
+                                .beginControlFlow("for(var command : commands)")
+                                .addStatement("command.schedule()")
+                                .endControlFlow()
+                                .build()
+                        )
+                        .endControlFlow()
+                        .build()
+                )
+                .endControlFlow()
+                .beginControlFlow("if (nextState != null)")
+                .addStatement("this.currentState = nextState")
+                .endControlFlow()
                 .build();
 
         TypeSpec type = TypeSpec
@@ -354,6 +403,7 @@ public class StateMachineGenerator {
                 .addField(managerField)
                 .addField(currentStateField)
                 .addField(transitionWhenMap)
+                .addField(transitionCommandMap)
                 .addMethod(constructor)
                 .addMethod(currentStateMethod)
                 .addMethod(fromMethod)
