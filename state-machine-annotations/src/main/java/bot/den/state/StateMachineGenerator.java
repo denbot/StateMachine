@@ -10,20 +10,20 @@ import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
 import java.io.IOException;
-import java.util.List;
+import java.util.function.BooleanSupplier;
 
 public class StateMachineGenerator {
     private final ProcessingEnvironment processingEnv;
     private final Element element;
 
-    private final String stateMachineName;
+    private final String stateSimpleName;
     private final TypeName stateType;
 
     public StateMachineGenerator(ProcessingEnvironment processingEnv, Element element) {
         this.processingEnv = processingEnv;
         this.element = element;
 
-        this.stateMachineName = element.getSimpleName() + "StateMachine";
+        stateSimpleName = element.getSimpleName().toString();
         this.stateType = TypeName.get(element.asType());
 
         // Validate that we've been annotated on classes we care about
@@ -66,13 +66,13 @@ public class StateMachineGenerator {
 
             String sameTypeErrorMessage = "HasStateTransitions parameter must be of type " + typeElement.getQualifiedName();
             TypeMirror genericParameter = typeArguments.get(0);
-            if(genericParameter.getKind() != TypeKind.DECLARED) {
+            if (genericParameter.getKind() != TypeKind.DECLARED) {
                 error(sameTypeErrorMessage);
                 return;
             }
 
             TypeElement interfaceImplementation = (TypeElement) util.asElement(genericParameter);
-            if(! interfaceImplementation.equals(typeElement)) {
+            if (!interfaceImplementation.equals(typeElement)) {
                 error(sameTypeErrorMessage);
                 return;
             }
@@ -81,13 +81,59 @@ public class StateMachineGenerator {
         }
 
         if (!hasTransitionsInterface) {
-            error("HasStateTransitions must be implemented for " + getPackageName(element) + "." + element.getSimpleName());
+            error("HasStateTransitions must be implemented for " + typeElement.getQualifiedName());
             return;
         }
     }
 
     public void generate() {
-        FieldSpec currentState = FieldSpec
+        ClassName toClassName = generateToClass();
+        ClassName fromClassName = generateFromClass(toClassName);
+        generateStateMachineClass(fromClassName);
+    }
+
+    private ClassName generateToClass() {
+        MethodSpec whenMethod = MethodSpec
+                .methodBuilder("transitionWhen")
+                .addModifiers(Modifier.PUBLIC)
+                .addParameter(BooleanSupplier.class, "booleanSupplier")
+                .build();
+
+        TypeSpec type = TypeSpec
+                .classBuilder(stateSimpleName + "To")
+                .addModifiers(Modifier.PUBLIC)
+                .addMethod(whenMethod)
+                .build();
+
+        writeType(type);
+
+        return ClassName.get(getPackageName(element), type.name());
+    }
+
+    private ClassName generateFromClass(ClassName toClassName) {
+        MethodSpec toMethod = MethodSpec
+                .methodBuilder("to")
+                .addModifiers(Modifier.PUBLIC)
+                .returns(toClassName)
+                .addParameter(stateType, "state")
+                .addStatement("return new " + toClassName.simpleName() + "()")
+                .build();
+
+        TypeSpec type = TypeSpec
+                .classBuilder(stateSimpleName + "From")
+                .addModifiers(Modifier.PUBLIC)
+                .addMethod(toMethod)
+                .build();
+
+        writeType(type);
+
+        return ClassName.get(getPackageName(element), type.name());
+    }
+
+    private void generateStateMachineClass(
+            ClassName fromClassName
+    ) {
+        FieldSpec currentStateField = FieldSpec
                 .builder(stateType, "currentState")
                 .build();
 
@@ -98,20 +144,46 @@ public class StateMachineGenerator {
                 .addStatement("this.currentState = initialState")
                 .build();
 
-        TypeSpec type = TypeSpec
-                .classBuilder(stateMachineName)
+        MethodSpec currentStateMethod = MethodSpec
+                .methodBuilder("currentState")
                 .addModifiers(Modifier.PUBLIC)
-                .addField(currentState)
-                .addMethod(constructor)
+                .returns(stateType)
+                .addStatement("return this.currentState")
                 .build();
 
-        // TODO Refactor this into a separate re-usable class/method
+        MethodSpec fromMethod = MethodSpec
+                .methodBuilder("from")
+                .addModifiers(Modifier.PUBLIC)
+                .addParameter(stateType, "state")
+                .returns(fromClassName)
+                .addStatement("return new " + fromClassName.simpleName() + "()")
+                .build();
+
+        MethodSpec pollMethod = MethodSpec
+                .methodBuilder("poll")
+                .addModifiers(Modifier.PUBLIC)
+                .build();
+
+        TypeSpec type = TypeSpec
+                .classBuilder(stateSimpleName + "StateMachine")
+                .addModifiers(Modifier.PUBLIC)
+                .addField(currentStateField)
+                .addMethod(constructor)
+                .addMethod(currentStateMethod)
+                .addMethod(fromMethod)
+                .addMethod(pollMethod)
+                .build();
+
+        writeType(type);
+    }
+
+    private void writeType(TypeSpec type) {
         String packageName = getPackageName(element);
         JavaFile file = JavaFile.builder(packageName, type).build();
         try {
             file.writeTo(processingEnv.getFiler());
         } catch (IOException e) {
-            error( "Failed to write class " + packageName + "." + stateMachineName);
+            error("Failed to write class " + packageName + "." + type.name());
             e.printStackTrace();
         }
     }
@@ -119,6 +191,7 @@ public class StateMachineGenerator {
     private void error(String error) {
         error(error, element);
     }
+
     private void error(String error, Element element) {
         processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR, error, element);
     }
