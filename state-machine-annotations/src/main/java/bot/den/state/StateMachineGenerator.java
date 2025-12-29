@@ -1,0 +1,136 @@
+package bot.den.state;
+
+import com.palantir.javapoet.*;
+
+import javax.annotation.processing.ProcessingEnvironment;
+import javax.lang.model.element.*;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
+import javax.lang.model.util.Types;
+import javax.tools.Diagnostic;
+import java.io.IOException;
+import java.util.List;
+
+public class StateMachineGenerator {
+    private final ProcessingEnvironment processingEnv;
+    private final Element element;
+
+    private final String stateMachineName;
+    private final TypeName stateType;
+
+    public StateMachineGenerator(ProcessingEnvironment processingEnv, Element element) {
+        this.processingEnv = processingEnv;
+        this.element = element;
+
+        this.stateMachineName = element.getSimpleName() + "StateMachine";
+        this.stateType = TypeName.get(element.asType());
+
+        // Validate that we've been annotated on classes we care about
+        if (element.getKind() != ElementKind.ENUM) {
+            error("StateMachine annotation must be made on an enum");
+            return;
+        }
+
+        Types util = processingEnv.getTypeUtils();
+
+        // Annotation interface only allows being placed on a class, so this cast is safe.
+        TypeElement typeElement = (TypeElement) element;
+        var interfaces = typeElement.getInterfaces();
+
+        boolean hasTransitionsInterface = false;
+        for (TypeMirror i : interfaces) {
+            if (i.getKind() != TypeKind.DECLARED) {
+                continue;  // This shouldn't happen, but let's not cast without being sure
+            }
+
+            DeclaredType declaredType = (DeclaredType) i;
+            TypeElement superClass = (TypeElement) util.asElement(declaredType);
+            if (superClass.getKind() != ElementKind.INTERFACE) {
+                continue;  // We only care about interfaces
+            }
+
+            if (!superClass.getQualifiedName().toString().equals("bot.den.state.HasStateTransitions")) {
+                continue;  // This isn't our interface
+            }
+
+            // Now we know it implemented our interface, so we can ignore the message below.
+            hasTransitionsInterface = true;
+
+            // We still need to check correctness
+            var typeArguments = declaredType.getTypeArguments();
+            if (typeArguments.size() != 1) {
+                error("The HasStateTransitions interface should only have one type argument");
+                return;
+            }
+
+            String sameTypeErrorMessage = "HasStateTransitions parameter must be of type " + typeElement.getQualifiedName();
+            TypeMirror genericParameter = typeArguments.get(0);
+            if(genericParameter.getKind() != TypeKind.DECLARED) {
+                error(sameTypeErrorMessage);
+                return;
+            }
+
+            TypeElement interfaceImplementation = (TypeElement) util.asElement(genericParameter);
+            if(! interfaceImplementation.equals(typeElement)) {
+                error(sameTypeErrorMessage);
+                return;
+            }
+
+            // At this point, that enum is correctly implemented
+        }
+
+        if (!hasTransitionsInterface) {
+            error("HasStateTransitions must be implemented for " + getPackageName(element) + "." + element.getSimpleName());
+            return;
+        }
+    }
+
+    public void generate() {
+        FieldSpec currentState = FieldSpec
+                .builder(stateType, "currentState")
+                .build();
+
+        MethodSpec constructor = MethodSpec
+                .constructorBuilder()
+                .addModifiers(Modifier.PUBLIC)
+                .addParameter(stateType, "initialState")
+                .addStatement("this.currentState = initialState")
+                .build();
+
+        TypeSpec type = TypeSpec
+                .classBuilder(stateMachineName)
+                .addModifiers(Modifier.PUBLIC)
+                .addField(currentState)
+                .addMethod(constructor)
+                .build();
+
+        // TODO Refactor this into a separate re-usable class/method
+        String packageName = getPackageName(element);
+        JavaFile file = JavaFile.builder(packageName, type).build();
+        try {
+            file.writeTo(processingEnv.getFiler());
+        } catch (IOException e) {
+            error( "Failed to write class " + packageName + "." + stateMachineName);
+            e.printStackTrace();
+        }
+    }
+
+    private void error(String error) {
+        error(error, element);
+    }
+    private void error(String error, Element element) {
+        processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR, error, element);
+    }
+
+    private static String getPackageName(Element e) {
+        while (e != null) {
+            if (e.getKind().equals(ElementKind.PACKAGE)) {
+                return ((PackageElement) e).getQualifiedName().toString();
+            }
+            e = e.getEnclosingElement();
+        }
+
+        return null;
+    }
+}
