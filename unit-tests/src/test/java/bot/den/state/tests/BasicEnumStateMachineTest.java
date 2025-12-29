@@ -2,8 +2,10 @@ package bot.den.state.tests;
 
 import bot.den.state.InvalidStateTransition;
 import edu.wpi.first.hal.HAL;
+import edu.wpi.first.wpilibj.event.EventLoop;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
 import edu.wpi.first.wpilibj2.command.Commands;
+import edu.wpi.first.wpilibj2.command.button.Trigger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -31,7 +33,7 @@ public class BasicEnumStateMachineTest {
         final AtomicBoolean test = new AtomicBoolean(false);
 
         // Set up our state machine transition
-        machine.from(BasicEnum.START).to(BasicEnum.STATE_A).transitionWhen(test::get);
+        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).transitionWhen(test::get);
 
         // Test our initial state
         assertEquals(BasicEnum.START, machine.currentState());
@@ -60,7 +62,7 @@ public class BasicEnumStateMachineTest {
         BasicEnumStateMachine machine = new BasicEnumStateMachine(BasicEnum.START);
 
         // Set up our state machine transition
-        machine.from(BasicEnum.START).to(BasicEnum.STATE_A).always();
+        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).always();
 
         // Test our initial state
         assertEquals(BasicEnum.START, machine.currentState());
@@ -80,7 +82,7 @@ public class BasicEnumStateMachineTest {
 
         // Set up our state machine transition. Always run to trigger the move to a Command
         machine
-                .from(BasicEnum.START)
+                .state(BasicEnum.START)
                 .to(BasicEnum.STATE_A)
                 .always()
                 .run(
@@ -108,7 +110,7 @@ public class BasicEnumStateMachineTest {
 
         // Set up our state machine transition. Always run to trigger the move to a Command
         machine
-                .from(BasicEnum.START)
+                .state(BasicEnum.START)
                 .to(BasicEnum.STATE_A)
                 .always()
                 .run(
@@ -140,7 +142,7 @@ public class BasicEnumStateMachineTest {
         // START -> END is invalid and should fail immediately
         assertThrows(
                 InvalidStateTransition.class,
-                () -> machine.from(BasicEnum.START).to(BasicEnum.END)
+                () -> machine.state(BasicEnum.START).to(BasicEnum.END)
         );
     }
 
@@ -149,8 +151,8 @@ public class BasicEnumStateMachineTest {
         BasicEnumStateMachine machine = new BasicEnumStateMachine(BasicEnum.START);
 
         // Set up two transitions to always run
-        machine.from(BasicEnum.START).to(BasicEnum.STATE_A).always();
-        machine.from(BasicEnum.STATE_A).to(BasicEnum.STATE_B).always();
+        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).always();
+        machine.state(BasicEnum.STATE_A).to(BasicEnum.STATE_B).always();
 
         // Assert that we're at the start state
         assertEquals(BasicEnum.START, machine.currentState());
@@ -170,5 +172,99 @@ public class BasicEnumStateMachineTest {
         // No more state moves
         machine.poll();
         assertEquals(BasicEnum.STATE_B, machine.currentState());
+    }
+
+    @Test
+    void basicTrigger() {
+        BasicEnumStateMachine machine = new BasicEnumStateMachine(BasicEnum.START);
+
+        // Create our trigger
+        Trigger trigger = machine.state(BasicEnum.STATE_A).trigger();
+
+        // Ensure `poll` will force a state transition
+        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).always();
+
+        assertFalse(trigger.getAsBoolean());
+
+        machine.poll();
+
+        assertTrue(trigger.getAsBoolean());
+    }
+
+    @Test
+    void triggerDefaultEventLoop() {
+        BasicEnumStateMachine machine = new BasicEnumStateMachine(BasicEnum.START);
+
+        final AtomicBoolean test = new AtomicBoolean(false);
+
+        // Create our trigger
+        machine
+                .state(BasicEnum.STATE_A)
+                .trigger()
+                .onTrue(
+                        Commands.runOnce(() -> test.set(true)).ignoringDisable(true)
+                );
+
+        // Ensure `poll` will force a state transition
+        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).always();
+
+        machine.poll();
+        CommandScheduler.getInstance().run();
+
+        assertTrue(test.get());
+    }
+
+    @Test
+    void triggerCustomEventLoop() {
+        BasicEnumStateMachine machine = new BasicEnumStateMachine(BasicEnum.START);
+
+        final AtomicBoolean test = new AtomicBoolean(false);
+
+        // Custom event loop
+        EventLoop eventLoop = new EventLoop();
+
+        // Create our trigger
+        machine
+                .state(BasicEnum.STATE_A)
+                .trigger(eventLoop)
+                .onTrue(
+                        Commands.runOnce(() -> test.set(true)).ignoringDisable(true)
+                );
+
+        // Ensure `poll` will force a state transition
+        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).always();
+
+        machine.poll();
+        CommandScheduler.getInstance().run();
+
+        // The default loop shouldn't have done anything
+        assertFalse(test.get());
+
+        // But our event loop poll will
+        eventLoop.poll();
+
+        assertTrue(test.get());
+    }
+
+    @Test
+    void triggerOnlyRunsOnChange() {
+        BasicEnumStateMachine machine = new BasicEnumStateMachine(BasicEnum.START);
+
+        final AtomicBoolean test = new AtomicBoolean(false);
+
+        // Create our trigger
+        machine
+                .state(BasicEnum.START)
+                .trigger()
+                .onTrue(
+                        Commands.runOnce(() -> test.set(true)).ignoringDisable(true)
+                );
+
+        // There should be no state to transition, but we still need to make sure it doesn't affect the outcome
+        machine.poll();
+        CommandScheduler.getInstance().run();
+
+        // The trigger did not run because START was the original state
+        assertFalse(test.get());
     }
 }

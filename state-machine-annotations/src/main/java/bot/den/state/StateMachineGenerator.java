@@ -1,7 +1,10 @@
 package bot.den.state;
 
 import com.palantir.javapoet.*;
+import edu.wpi.first.wpilibj.event.EventLoop;
 import edu.wpi.first.wpilibj2.command.Command;
+import edu.wpi.first.wpilibj2.command.CommandScheduler;
+import edu.wpi.first.wpilibj2.command.button.Trigger;
 
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.lang.model.element.*;
@@ -11,10 +14,7 @@ import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.function.BooleanSupplier;
 
 public class StateMachineGenerator {
@@ -95,7 +95,6 @@ public class StateMachineGenerator {
 
         if (!hasTransitionsInterface) {
             error("HasStateTransitions must be implemented for " + typeElement.getQualifiedName());
-            return;
         }
     }
 
@@ -141,10 +140,29 @@ public class StateMachineGenerator {
                 .addStatement("toStateMap.add(command)")
                 .build();
 
+        MethodSpec triggerMethod = MethodSpec
+                .methodBuilder("trigger")
+                .addModifiers(Modifier.PUBLIC)
+                .returns(Trigger.class)
+                .addParameter(EventLoop.class, "eventLoop")
+                .addParameter(stateType, "state")
+                .addCode("""
+                                if(! $1T.this.triggerMap.containsKey(state)) {
+                                    var trigger = new Trigger(eventLoop, () -> $1T.this.currentState.equals(state));
+                                    triggerMap.put(state, trigger);
+                                }
+                                
+                                return triggerMap.get(state);
+                                """,
+                        stateMachineClassName
+                )
+                .build();
+
         return TypeSpec
                 .classBuilder(stateManagerClassName)
                 .addMethod(whenMethod)
                 .addMethod(runMethod)
+                .addMethod(triggerMethod)
                 .build();
     }
 
@@ -265,6 +283,21 @@ public class StateMachineGenerator {
                 )
                 .build();
 
+        MethodSpec triggerDefaultMethod = MethodSpec
+                .methodBuilder("trigger")
+                .addModifiers(Modifier.PUBLIC)
+                .returns(Trigger.class)
+                .addStatement("return this.trigger($T.getInstance().getDefaultButtonLoop())", CommandScheduler.class)
+                .build();
+
+        MethodSpec triggerEventLoopMethod = MethodSpec
+                .methodBuilder("trigger")
+                .addModifiers(Modifier.PUBLIC)
+                .returns(Trigger.class)
+                .addParameter(EventLoop.class, "eventLoop")
+                .addStatement("return manager.trigger(eventLoop, targetState)")
+                .build();
+
         TypeSpec type = TypeSpec
                 .classBuilder(stateFromClassName)
                 .addModifiers(Modifier.PUBLIC)
@@ -272,6 +305,8 @@ public class StateMachineGenerator {
                 .addField(targetStateField)
                 .addMethod(constructor)
                 .addMethod(toMethod)
+                .addMethod(triggerDefaultMethod)
+                .addMethod(triggerEventLoopMethod)
                 .build();
 
         writeType(type);
@@ -322,6 +357,16 @@ public class StateMachineGenerator {
                 .addModifiers(Modifier.PRIVATE)
                 .build();
 
+        var triggerMapType = ParameterizedTypeName.get(
+                ClassName.get(Map.class),
+                stateType,
+                ClassName.get(Trigger.class)
+        );
+        FieldSpec triggerMap = FieldSpec
+                .builder(triggerMapType, "triggerMap")
+                .addModifiers(Modifier.PRIVATE)
+                .build();
+
         MethodSpec constructor = MethodSpec
                 .constructorBuilder()
                 .addModifiers(Modifier.PUBLIC)
@@ -329,6 +374,7 @@ public class StateMachineGenerator {
                 .addStatement("this.currentState = initialState")
                 .addStatement("this.transitionWhenMap = new $T<>()", HashMap.class)
                 .addStatement("this.transitionCommandMap = new $T<>()", HashMap.class)
+                .addStatement("this.triggerMap = new $T<>()", HashMap.class)
                 .addStatement("this.manager = new $T()", stateManagerClassName)
                 .build();
 
@@ -339,8 +385,8 @@ public class StateMachineGenerator {
                 .addStatement("return this.currentState")
                 .build();
 
-        MethodSpec fromMethod = MethodSpec
-                .methodBuilder("from")
+        MethodSpec stateMethod = MethodSpec
+                .methodBuilder("state")
                 .addModifiers(Modifier.PUBLIC)
                 .addParameter(stateType, "state")
                 .returns(stateFromClassName)
@@ -352,33 +398,25 @@ public class StateMachineGenerator {
                         stateFromClassName)
                 .build();
 
+        var optionalState = ParameterizedTypeName.get(
+                ClassName.get(Optional.class),
+                stateType
+        );
+
         MethodSpec pollMethod = MethodSpec
                 .methodBuilder("poll")
                 .addModifiers(Modifier.PUBLIC)
-                .addStatement("$T nextState = null", stateType)
-                .beginControlFlow("if (transitionWhenMap.containsKey(currentState))")
-                .addCode(CodeBlock
-                        .builder()
-                        .addStatement("var toMap = transitionWhenMap.get(currentState)")
-                        .beginControlFlow("for(var entry : toMap.entrySet())")
-                        .addStatement("var toState = entry.getKey()")
-                        .add(CodeBlock
-                                .builder()
-                                .beginControlFlow("for(var supplier : toMap.get(toState))")
-                                .add(CodeBlock
-                                        .builder()
-                                        .beginControlFlow("if (supplier.getAsBoolean())")
-                                        .addStatement("nextState = entry.getKey()")
-                                        .endControlFlow()
-                                        .build())
-                                .endControlFlow()
-                                .build()
-                        )
-                        .endControlFlow()
-                        .build()
+                .addCode("""
+                                $T nextStateOption = this.getNextState();
+                                if(nextStateOption.isEmpty()) {
+                                    return;
+                                }
+                                
+                                $T nextState = nextStateOption.get();
+                                """,
+                        optionalState,
+                        stateType
                 )
-                .endControlFlow()
-
                 .beginControlFlow("if (transitionCommandMap.containsKey(currentState))")
                 .addCode(CodeBlock
                         .builder()
@@ -401,6 +439,33 @@ public class StateMachineGenerator {
                 .endControlFlow()
                 .build();
 
+        MethodSpec getNextStateMethod = MethodSpec
+                .methodBuilder("getNextState")
+                .addModifiers(Modifier.PRIVATE)
+                .returns(optionalState)
+                .addCode("""
+                        if (!transitionWhenMap.containsKey(currentState)) {
+                            return Optional.empty();
+                        }
+                        
+                        var toMap = transitionWhenMap.get(currentState);
+                        for(var entry : toMap.entrySet()) {
+                            var toState = entry.getKey();
+                            if(! toMap.containsKey(toState)) {
+                                return Optional.empty();
+                            }
+                            for(var supplier : toMap.get(toState)) {
+                                if (supplier.getAsBoolean()) {
+                                    return Optional.of(entry.getKey());  // TODO Test issue where we can transition always to two states
+                                }
+                            }
+                        }
+                        
+                        return Optional.empty();
+                        """
+                )
+                .build();
+
         TypeSpec type = TypeSpec
                 .classBuilder(stateMachineClassName)
                 .addModifiers(Modifier.PUBLIC)
@@ -408,10 +473,12 @@ public class StateMachineGenerator {
                 .addField(currentStateField)
                 .addField(transitionWhenMap)
                 .addField(transitionCommandMap)
+                .addField(triggerMap)
                 .addMethod(constructor)
                 .addMethod(currentStateMethod)
-                .addMethod(fromMethod)
+                .addMethod(stateMethod)
                 .addMethod(pollMethod)
+                .addMethod(getNextStateMethod)
                 .addType(internalStateManager)
                 .build();
 
@@ -420,7 +487,7 @@ public class StateMachineGenerator {
 
     private void writeType(TypeSpec type) {
         String packageName = getPackageName(element);
-        JavaFile file = JavaFile.builder(packageName, type).build();
+        JavaFile file = JavaFile.builder(packageName, type).indent("    ").build();
         try {
             file.writeTo(processingEnv.getFiler());
         } catch (IOException e) {
