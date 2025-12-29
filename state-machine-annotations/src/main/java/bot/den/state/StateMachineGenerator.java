@@ -10,20 +10,31 @@ import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.function.BooleanSupplier;
 
 public class StateMachineGenerator {
     private final ProcessingEnvironment processingEnv;
     private final Element element;
 
-    private final String stateSimpleName;
+    private final ClassName stateClassName;
+    private final ClassName stateMachineClassName;
+    private final ClassName stateManagerClassName;
+    private final ClassName stateFromClassName;
+    private final ClassName stateToClassName;
     private final TypeName stateType;
 
     public StateMachineGenerator(ProcessingEnvironment processingEnv, Element element) {
         this.processingEnv = processingEnv;
         this.element = element;
 
-        stateSimpleName = element.getSimpleName().toString();
+        stateClassName = (ClassName) ClassName.get(element.asType());
+        String simpleStateName = stateClassName.simpleName();
+        stateMachineClassName = stateClassName.peerClass(simpleStateName + "StateMachine");
+        stateManagerClassName = stateMachineClassName.nestedClass(simpleStateName + "StateManager");
+        stateFromClassName = stateClassName.peerClass(simpleStateName + "From");
+        stateToClassName = stateClassName.peerClass(simpleStateName + "To");
         this.stateType = TypeName.get(element.asType());
 
         // Validate that we've been annotated on classes we care about
@@ -87,54 +98,153 @@ public class StateMachineGenerator {
     }
 
     public void generate() {
-        ClassName toClassName = generateToClass();
-        ClassName fromClassName = generateFromClass(toClassName);
-        generateStateMachineClass(fromClassName);
+        TypeSpec internalStateManager = createInternalStateManager();
+        generateToClass();
+        generateFromClass();
+        generateStateMachineClass(internalStateManager);
     }
 
-    private ClassName generateToClass() {
+    /*
+    TODO:
+    - transitionWhenMap needs to understand what we're transitioning to and support multiple BooleanSuppliers
+    - After that, we need to modify transitionWhen and poll to handle that new change
+     */
+
+    private TypeSpec createInternalStateManager() {
+        MethodSpec whenMethod = MethodSpec
+                .methodBuilder("transitionWhen")
+                .addModifiers(Modifier.PUBLIC)
+                .addParameter(stateType, "fromState")
+                .addParameter(stateType, "toState")
+                .addParameter(BooleanSupplier.class, "booleanSupplier")
+                .addStatement("$T.this.transitionWhenMap.put(fromState, booleanSupplier)", stateMachineClassName)
+                .build();
+
+        return TypeSpec
+                .classBuilder(stateManagerClassName)
+                .addMethod(whenMethod)
+                .build();
+    }
+
+    private void generateToClass() {
+        FieldSpec managerField = FieldSpec
+                .builder(stateManagerClassName, "manager")
+                .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
+                .build();
+
+        FieldSpec fromStateField = FieldSpec
+                .builder(stateType, "fromState")
+                .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
+                .build();
+
+        FieldSpec toStateField = FieldSpec
+                .builder(stateType, "toState")
+                .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
+                .build();
+
+        MethodSpec constructor = MethodSpec
+                .constructorBuilder()
+                .addModifiers(Modifier.PUBLIC)
+                .addParameter(stateManagerClassName, "manager")
+                .addParameter(stateType, "fromState")
+                .addParameter(stateType, "toState")
+                .addStatement("this.manager = manager")
+                .addStatement("this.fromState = fromState")
+                .addStatement("this.toState = toState")
+                .build();
+
         MethodSpec whenMethod = MethodSpec
                 .methodBuilder("transitionWhen")
                 .addModifiers(Modifier.PUBLIC)
                 .addParameter(BooleanSupplier.class, "booleanSupplier")
+                .addStatement("""
+                        this.manager.transitionWhen(
+                        this.fromState,
+                        this.toState,
+                        booleanSupplier
+                        )"""
+                )
                 .build();
 
         TypeSpec type = TypeSpec
-                .classBuilder(stateSimpleName + "To")
+                .classBuilder(stateToClassName)
                 .addModifiers(Modifier.PUBLIC)
+                .addField(managerField)
+                .addField(fromStateField)
+                .addField(toStateField)
+                .addMethod(constructor)
                 .addMethod(whenMethod)
                 .build();
 
         writeType(type);
-
-        return ClassName.get(getPackageName(element), type.name());
     }
 
-    private ClassName generateFromClass(ClassName toClassName) {
+    private void generateFromClass() {
+        FieldSpec managerField = FieldSpec
+                .builder(stateManagerClassName, "manager")
+                .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
+                .build();
+
+        FieldSpec targetStateField = FieldSpec
+                .builder(stateType, "targetState")
+                .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
+                .build();
+
+        MethodSpec constructor = MethodSpec
+                .constructorBuilder()
+                .addModifiers(Modifier.PUBLIC)
+                .addParameter(stateManagerClassName, "manager")
+                .addParameter(stateType, "state")
+                .addStatement("this.targetState = state")
+                .addStatement("this.manager = manager")
+                .build();
+
         MethodSpec toMethod = MethodSpec
                 .methodBuilder("to")
                 .addModifiers(Modifier.PUBLIC)
-                .returns(toClassName)
+                .returns(stateToClassName)
                 .addParameter(stateType, "state")
-                .addStatement("return new " + toClassName.simpleName() + "()")
+                .addStatement(
+                        """
+                                return new $T(
+                                this.manager,
+                                this.targetState,
+                                state
+                                )""",
+                        stateToClassName
+                )
                 .build();
 
         TypeSpec type = TypeSpec
-                .classBuilder(stateSimpleName + "From")
+                .classBuilder(stateFromClassName)
                 .addModifiers(Modifier.PUBLIC)
+                .addField(managerField)
+                .addField(targetStateField)
+                .addMethod(constructor)
                 .addMethod(toMethod)
                 .build();
 
         writeType(type);
-
-        return ClassName.get(getPackageName(element), type.name());
     }
 
-    private void generateStateMachineClass(
-            ClassName fromClassName
-    ) {
+    private void generateStateMachineClass(TypeSpec internalStateManager) {
+        FieldSpec managerField = FieldSpec
+                .builder(stateManagerClassName, "manager")
+                .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
+                .build();
+
         FieldSpec currentStateField = FieldSpec
                 .builder(stateType, "currentState")
+                .build();
+
+        var transitionMapType = ParameterizedTypeName.get(
+                ClassName.get(Map.class),
+                stateType,
+                TypeName.get(BooleanSupplier.class)
+        );
+        FieldSpec transitionWhenMap = FieldSpec
+                .builder(transitionMapType, "transitionWhenMap")
+                .addModifiers(Modifier.PRIVATE)
                 .build();
 
         MethodSpec constructor = MethodSpec
@@ -142,6 +252,8 @@ public class StateMachineGenerator {
                 .addModifiers(Modifier.PUBLIC)
                 .addParameter(stateType, "initialState")
                 .addStatement("this.currentState = initialState")
+                .addStatement("this.transitionWhenMap = new $T<>()", HashMap.class)
+                .addStatement("this.manager = new $T()", stateManagerClassName)
                 .build();
 
         MethodSpec currentStateMethod = MethodSpec
@@ -155,23 +267,37 @@ public class StateMachineGenerator {
                 .methodBuilder("from")
                 .addModifiers(Modifier.PUBLIC)
                 .addParameter(stateType, "state")
-                .returns(fromClassName)
-                .addStatement("return new " + fromClassName.simpleName() + "()")
+                .returns(stateFromClassName)
+                .addStatement(
+                        """
+                                return new  $T(
+                                this.manager,
+                                state)""",
+                        stateFromClassName)
                 .build();
 
         MethodSpec pollMethod = MethodSpec
                 .methodBuilder("poll")
                 .addModifiers(Modifier.PUBLIC)
+                .beginControlFlow("if (transitionWhenMap.containsKey(currentState))")
+                .addStatement("var supplier = transitionWhenMap.get(currentState)")
+                .beginControlFlow("if(supplier.getAsBoolean())")
+                .addStatement("currentState = BasicEnum.STATE_B")
+                .endControlFlow()
+                .endControlFlow()
                 .build();
 
         TypeSpec type = TypeSpec
-                .classBuilder(stateSimpleName + "StateMachine")
+                .classBuilder(stateMachineClassName)
                 .addModifiers(Modifier.PUBLIC)
+                .addField(managerField)
                 .addField(currentStateField)
+                .addField(transitionWhenMap)
                 .addMethod(constructor)
                 .addMethod(currentStateMethod)
                 .addMethod(fromMethod)
                 .addMethod(pollMethod)
+                .addType(internalStateManager)
                 .build();
 
         writeType(type);
