@@ -95,7 +95,8 @@ public class StateMachineGenerator extends GenerationBase {
                     .methodBuilder("attemptTransitionTo")
                     .addAnnotation(Override.class)
                     .addModifiers(Modifier.PUBLIC)
-                    .addParameter(stateData, "data");
+                    .addParameter(stateData, "data")
+                    .beginControlFlow("try");
 
             for (ClassName typeName : types) {
                 // Add the type parameter to the constructor
@@ -125,6 +126,12 @@ public class StateMachineGenerator extends GenerationBase {
             }
 
             canBeComparedMethodBuilder.addStatement("return true");
+            attemptTransitionToBuilder
+                    .addCode("\n")
+                    .nextControlFlow("catch ($T ex)", InvalidStateTransition.class)
+                    .addStatement("throw new $T(this, data, ex)", InvalidStateTransition.class)
+                    .endControlFlow();
+
 
             ClassName nestedName = recordValidator.innerClassMap.get(types);
 
