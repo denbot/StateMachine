@@ -4,6 +4,7 @@ import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.RoundEnvironment;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.TypeElement;
+import javax.tools.Diagnostic;
 import java.util.Optional;
 import java.util.Set;
 
@@ -24,8 +25,13 @@ public class StateMachineAnnotationProcessor extends AbstractProcessor {
         roundEnv
                 .getElementsAnnotatedWith(annotation)
                 .forEach((element -> {
-                    var generator = new StateMachineGenerator(processingEnv, (TypeElement) element);
-                    generator.generate();
+                    try {
+                        var generator = new StateMachineGenerator(processingEnv, (TypeElement) element);
+
+                        generator.generate();
+                    } catch (Exception e) {
+                        processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR, e.getMessage(), element);
+                    }
                 }));
 
         return true;

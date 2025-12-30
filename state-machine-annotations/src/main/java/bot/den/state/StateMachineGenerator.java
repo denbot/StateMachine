@@ -1,6 +1,9 @@
 package bot.den.state;
 
 import bot.den.state.exceptions.InvalidStateTransition;
+import bot.den.state.validator.EnumValidator;
+import bot.den.state.validator.RecordValidator;
+import bot.den.state.validator.Validator;
 import com.palantir.javapoet.*;
 import edu.wpi.first.wpilibj.event.EventLoop;
 import edu.wpi.first.wpilibj2.command.Command;
@@ -14,18 +17,28 @@ import java.util.*;
 import java.util.function.BooleanSupplier;
 
 public class StateMachineGenerator extends GenerationBase {
-    private final StateTranslator translator;
     private final ClassName stateMachineClassName;
     private final ClassName stateManagerClassName;
     private final ClassName stateFromClassName;
     private final ClassName stateToClassName;
-    private final TypeName stateType;
+    private final ClassName stateDataName;
+
+    private final Validator validator;
 
     public StateMachineGenerator(ProcessingEnvironment processingEnv, TypeElement element) {
         super(processingEnv, element);
 
-        this.translator = new StateTranslator(processingEnv, element);
-        this.stateType = translator.stateType;
+        if(element.getKind() == ElementKind.ENUM) {
+            this.validator = new EnumValidator(processingEnv, element);
+            this.stateDataName = validator.originalTypeName();
+
+        } else if(element.getKind() == ElementKind.RECORD) {
+            this.validator = new RecordValidator(processingEnv, element);
+            this.stateDataName = validator.wrappedClassName();
+
+        } else {
+            throw new RuntimeException("The StateMachine annotation is only valid on enums and records");
+        }
 
         ClassName annotatedClassName = (ClassName) ClassName.get(element.asType());
         String simpleStateName = annotatedClassName.simpleName();
@@ -36,18 +49,127 @@ public class StateMachineGenerator extends GenerationBase {
     }
 
     public void generate() {
+        if(validator instanceof RecordValidator recordValidator) {
+            generateRecordWrapper(recordValidator);
+        }
+
         TypeSpec internalStateManager = createInternalStateManager();
         generateToClass();
         generateFromClass();
         generateStateMachineClass(internalStateManager);
     }
 
+    private void generateRecordWrapper(RecordValidator recordValidator) {
+        // This is our new Data class' name.
+        ClassName stateData = recordValidator.wrappedClassName();
+
+        ParameterizedTypeName canTransitionState = ParameterizedTypeName
+                .get(
+                        ClassName.get(CanTransitionState.class),
+                        recordValidator.wrappedClassName()
+                );
+
+        /*
+         We're going to build a new wrapper around this interface class that is itself a bunch of records that
+         implement that interface.
+        */
+        TypeSpec.Builder recordInterfaceBuilder = TypeSpec
+                .interfaceBuilder(stateData)
+                .addSuperinterface(canTransitionState);
+
+        for (ClassName[] types : recordValidator.permutations) {
+            MethodSpec.Builder recordConstructor = MethodSpec
+                    .constructorBuilder();
+
+            MethodSpec.Builder canBeComparedMethodBuilder = MethodSpec
+                    .methodBuilder("canTransitionTo")
+                    .addAnnotation(Override.class)
+                    .addModifiers(Modifier.PUBLIC)
+                    .returns(boolean.class)
+                    .addParameter(stateData, "data");
+
+            for (ClassName typeName : types) {
+                // Add the type parameter to the constructor
+                String fieldName = recordValidator.fieldNameMap.get(typeName);
+                recordConstructor.addParameter(typeName, fieldName);
+
+                var optionalType = ParameterizedTypeName.get(
+                        ClassName.get(Optional.class),
+                        typeName
+                );
+
+                canBeComparedMethodBuilder.addCode(
+                        """
+                                $T %1$sOptional = %2$s(data);
+                                if(%1$sOptional.isPresent() && !this.%1$s.canTransitionTo(%1$sOptional.get())) {
+                                    return false;
+                                }
+                                """.formatted(
+                                fieldName,
+                                "get" + ucfirst(fieldName)
+                        ),
+                        optionalType
+                );
+            }
+
+            canBeComparedMethodBuilder.addStatement("return true");
+
+            ClassName nestedName = recordValidator.innerClassMap.get(types);
+
+            TypeSpec innerClass = TypeSpec
+                    .recordBuilder(nestedName)
+                    .addModifiers(Modifier.PUBLIC, Modifier.STATIC)
+                    .recordConstructor(recordConstructor.build())
+                    .addSuperinterface(stateData)
+                    .addMethod(canBeComparedMethodBuilder.build())
+                    .build();
+
+            recordInterfaceBuilder.addType(innerClass);
+        }
+
+        // Next up, we need a helper method for each of the original record fields that help us with comparing if states can transition
+        for (var recordEntry : recordValidator.fieldNameMap.entrySet()) {
+            var entryType = recordEntry.getKey();
+            var entryName = recordEntry.getValue();
+
+            var optionalType = ParameterizedTypeName.get(
+                    ClassName.get(Optional.class),
+                    entryType
+            );
+
+            MethodSpec.Builder extractorMethodBuilder = MethodSpec
+                    .methodBuilder("get" + ucfirst(entryName))
+                    .addModifiers(Modifier.PUBLIC, Modifier.STATIC)
+                    .returns(optionalType)
+                    .addParameter(stateData, "data");
+            for (var types : recordValidator.permutations) {
+                if (!Arrays.asList(types).contains(entryType)) {
+                    continue;
+                }
+
+                var innerClassName = recordValidator.innerClassMap.get(types);
+
+                extractorMethodBuilder.addStatement(
+                        "if (data instanceof $T s) return $T.of(s." + entryName + ")",
+                        innerClassName,
+                        Optional.class
+                );
+            }
+
+            extractorMethodBuilder.addStatement("return Optional.empty()");
+
+            recordInterfaceBuilder.addMethod(extractorMethodBuilder.build());
+        }
+
+        writeType(recordInterfaceBuilder.build());
+    }
+
     private TypeSpec createInternalStateManager() {
         MethodSpec whenMethod = MethodSpec
                 .methodBuilder("transitionWhen")
                 .addModifiers(Modifier.PUBLIC)
-                .addParameter(stateType, "fromState")
-                .addParameter(stateType, "toState")
+                .addParameter(stateDataName, "fromState")
+                .addParameter(stateDataName, "toState")
                 .addParameter(BooleanSupplier.class, "booleanSupplier")
                 .addCode("""
                                 if(!$1T.this.transitionWhenMap.containsKey(fromState)) {
@@ -70,8 +192,8 @@ public class StateMachineGenerator extends GenerationBase {
         MethodSpec runMethod = MethodSpec
                 .methodBuilder("run")
                 .addModifiers(Modifier.PUBLIC)
-                .addParameter(stateType, "fromState")
-                .addParameter(stateType, "toState")
+                .addParameter(stateDataName, "fromState")
+                .addParameter(stateDataName, "toState")
                 .addParameter(Command.class, "command")
                 .addCode("""
                                 if(!$1T.this.transitionCommandMap.containsKey(fromState)) {
@@ -95,7 +217,7 @@ public class StateMachineGenerator extends GenerationBase {
                 .addModifiers(Modifier.PUBLIC)
                 .returns(Trigger.class)
                 .addParameter(EventLoop.class, "eventLoop")
-                .addParameter(stateType, "state")
+                .addParameter(stateDataName, "state")
                 .addCode("""
                                 if(! $1T.this.triggerMap.containsKey(state)) {
                                     var trigger = new Trigger(eventLoop, () -> $1T.this.currentState.equals(state));
@@ -111,8 +233,8 @@ public class StateMachineGenerator extends GenerationBase {
         MethodSpec guardInvalidTransitionMethod = MethodSpec
                 .methodBuilder("guardInvalidTransition")
                 .addModifiers(Modifier.PUBLIC)
-                .addParameter(stateType, "fromState")
-                .addParameter(stateType, "toState")
+                .addParameter(stateDataName, "fromState")
+                .addParameter(stateDataName, "toState")
                 .addCode("""
                                 if(! fromState.canTransitionTo(toState)) {
                                     throw new $T(fromState, toState);
@@ -137,12 +259,12 @@ public class StateMachineGenerator extends GenerationBase {
                 .build();
 
         FieldSpec fromStateField = FieldSpec
-                .builder(stateType, "fromState")
+                .builder(stateDataName, "fromState")
                 .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
                 .build();
 
         FieldSpec toStateField = FieldSpec
-                .builder(stateType, "toState")
+                .builder(stateDataName, "toState")
                 .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
                 .build();
 
@@ -150,8 +272,8 @@ public class StateMachineGenerator extends GenerationBase {
                 .constructorBuilder()
                 .addModifiers(Modifier.PUBLIC)
                 .addParameter(stateManagerClassName, "manager")
-                .addParameter(stateType, "fromState")
-                .addParameter(stateType, "toState")
+                .addParameter(stateDataName, "fromState")
+                .addParameter(stateDataName, "toState")
                 .addCode("""
                         this.manager = manager;
                         this.fromState = fromState;
@@ -218,7 +340,7 @@ public class StateMachineGenerator extends GenerationBase {
                 .build();
 
         FieldSpec targetStateField = FieldSpec
-                .builder(stateType, "targetState")
+                .builder(stateDataName, "targetState")
                 .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
                 .build();
 
@@ -226,7 +348,7 @@ public class StateMachineGenerator extends GenerationBase {
                 .constructorBuilder()
                 .addModifiers(Modifier.PUBLIC)
                 .addParameter(stateManagerClassName, "manager")
-                .addParameter(stateType, "state")
+                .addParameter(stateDataName, "state")
                 .addStatement("this.targetState = state")
                 .addStatement("this.manager = manager")
                 .build();
@@ -235,7 +357,7 @@ public class StateMachineGenerator extends GenerationBase {
                 .methodBuilder("to")
                 .addModifiers(Modifier.PUBLIC)
                 .returns(stateToClassName)
-                .addParameter(stateType, "state")
+                .addParameter(stateDataName, "state")
                 .addStatement(
                         """
                                 return new $T(
@@ -283,16 +405,16 @@ public class StateMachineGenerator extends GenerationBase {
                 .build();
 
         FieldSpec currentStateField = FieldSpec
-                .builder(stateType, "currentState")
+                .builder(stateDataName, "currentState")
                 .addModifiers(Modifier.PRIVATE)
                 .build();
 
         var transitionWhenMapType = ParameterizedTypeName.get(
                 ClassName.get(Map.class),
-                stateType,
+                stateDataName,
                 ParameterizedTypeName.get(
                         ClassName.get(Map.class),
-                        stateType,
+                        stateDataName,
                         ParameterizedTypeName.get(
                                 List.class,
                                 BooleanSupplier.class
@@ -306,10 +428,10 @@ public class StateMachineGenerator extends GenerationBase {
 
         var transitionCommandMapType = ParameterizedTypeName.get(
                 ClassName.get(Map.class),
-                stateType,
+                stateDataName,
                 ParameterizedTypeName.get(
                         ClassName.get(Map.class),
-                        stateType,
+                        stateDataName,
                         ParameterizedTypeName.get(
                                 List.class,
                                 Command.class
@@ -323,7 +445,7 @@ public class StateMachineGenerator extends GenerationBase {
 
         var triggerMapType = ParameterizedTypeName.get(
                 ClassName.get(Map.class),
-                stateType,
+                stateDataName,
                 ClassName.get(Trigger.class)
         );
         FieldSpec triggerMap = FieldSpec
@@ -334,7 +456,7 @@ public class StateMachineGenerator extends GenerationBase {
         MethodSpec constructor = MethodSpec
                 .constructorBuilder()
                 .addModifiers(Modifier.PUBLIC)
-                .addParameter(stateType, "initialState")
+                .addParameter(stateDataName, "initialState")
                 .addCode("""
                                 this.currentState = initialState;
                                 this.transitionWhenMap = new $2T<>();
@@ -349,14 +471,14 @@ public class StateMachineGenerator extends GenerationBase {
         MethodSpec currentStateMethod = MethodSpec
                 .methodBuilder("currentState")
                 .addModifiers(Modifier.PUBLIC)
-                .returns(stateType)
+                .returns(stateDataName)
                 .addStatement("return this.currentState")
                 .build();
 
         MethodSpec stateMethod = MethodSpec
                 .methodBuilder("state")
                 .addModifiers(Modifier.PUBLIC)
-                .addParameter(stateType, "state")
+                .addParameter(stateDataName, "state")
                 .returns(stateFromClassName)
                 .addStatement(
                         """
@@ -369,7 +491,7 @@ public class StateMachineGenerator extends GenerationBase {
         MethodSpec transitionToMethod = MethodSpec
                 .methodBuilder("transitionTo")
                 .addModifiers(Modifier.PUBLIC)
-                .addParameter(stateType, "state")
+                .addParameter(stateDataName, "state")
                 .returns(Command.class)
                 .addCode("""
                                 return $T.runOnce(() -> updateState(state)).ignoringDisable(true);
@@ -389,7 +511,7 @@ public class StateMachineGenerator extends GenerationBase {
 
         var optionalState = ParameterizedTypeName.get(
                 ClassName.get(Optional.class),
-                stateType
+                stateDataName
         );
 
         MethodSpec pollMethod = MethodSpec
@@ -406,7 +528,7 @@ public class StateMachineGenerator extends GenerationBase {
                                 this.updateState(nextState);
                                 """,
                         optionalState,
-                        stateType
+                        stateDataName
                 )
                 .build();
 
@@ -440,7 +562,7 @@ public class StateMachineGenerator extends GenerationBase {
         MethodSpec updateStateMethod = MethodSpec
                 .methodBuilder("updateState")
                 .addModifiers(Modifier.PRIVATE)
-                .addParameter(stateType, "nextState")
+                .addParameter(stateDataName, "nextState")
                 .addCode("""
                         this.manager.guardInvalidTransition(currentState, nextState);
                         
@@ -453,7 +575,7 @@ public class StateMachineGenerator extends GenerationBase {
         MethodSpec runTransitionCommands = MethodSpec
                 .methodBuilder("runTransitionCommands")
                 .addModifiers(Modifier.PRIVATE)
-                .addParameter(stateType, "nextState")
+                .addParameter(stateDataName, "nextState")
                 .addCode("""
                         if (! transitionCommandMap.containsKey(currentState)) {
                             return;

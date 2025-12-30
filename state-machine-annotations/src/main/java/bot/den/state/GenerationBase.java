@@ -9,6 +9,7 @@ import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
 import java.io.IOException;
@@ -16,13 +17,19 @@ import java.io.IOException;
 public abstract class GenerationBase {
     final ProcessingEnvironment processingEnv;
     final TypeElement annotatedElement;
+    final ElementKind annotatedKind;
     final Types typeUtils;
+    final Elements elementUtils;
 
     GenerationBase(ProcessingEnvironment processingEnv, TypeElement annotatedElement) {
         this.processingEnv = processingEnv;
         this.annotatedElement = annotatedElement;
+        this.annotatedKind = annotatedElement.getKind();
         this.typeUtils = processingEnv.getTypeUtils();
+        this.elementUtils = processingEnv.getElementUtils();
     }
+
+    public abstract void generate();
 
     ClassName writeType(TypeSpec type) {
         String packageName = getPackageName(annotatedElement);
