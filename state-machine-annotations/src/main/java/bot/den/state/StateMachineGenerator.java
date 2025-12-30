@@ -371,21 +371,74 @@ public class StateMachineGenerator extends GenerationBase {
                 .addStatement("this.manager = manager")
                 .build();
 
-        MethodSpec toMethod = MethodSpec
-                .methodBuilder("to")
-                .addModifiers(Modifier.PUBLIC)
-                .returns(stateToClassName)
-                .addParameter(stateDataName, "state")
-                .addStatement(
-                        """
-                                return new $T(
-                                this.manager,
-                                this.targetState,
-                                state
-                                )""",
-                        stateToClassName
-                )
-                .build();
+        List<MethodSpec> toMethods = validator.visitPermutations(new Validator.Visitor<>() {
+            @Override
+            public MethodSpec acceptUserDataType() {
+                CodeBlock dataParameter;
+                if (validator instanceof EnumValidator) {
+                    dataParameter = CodeBlock.of(
+                            """
+                                    return new $T(
+                                    this.manager,
+                                    this.targetState,
+                                    state
+                                    )""",
+                            stateToClassName);
+                } else if (validator instanceof RecordValidator rv) {
+                    dataParameter = CodeBlock.of("return to($T.getRecordData(state))", rv.wrappedClassName());
+                } else {
+                    throw new RuntimeException("Unknown validator type");
+                }
+
+                return MethodSpec
+                        .methodBuilder("to")
+                        .addModifiers(Modifier.PUBLIC)
+                        .addParameter(validator.originalTypeName(), "state")
+                        .returns(stateToClassName)
+                        .addStatement(dataParameter)
+                        .build();
+            }
+
+            @Override
+            public MethodSpec acceptFields(RecordValidator validator, List<ClassName> fields) {
+                MethodSpec.Builder methodBuilder = MethodSpec
+                        .methodBuilder("to")
+                        .addModifiers(Modifier.PUBLIC)
+                        .returns(stateToClassName);
+
+                for (var type : fields) {
+                    methodBuilder.addParameter(type, validator.fieldNameMap.get(type));
+                }
+
+                CodeBlock code = CodeBlock
+                        .builder()
+                        .add("return to(\n")
+                        .add(validator.emitDataClass(fields))
+                        .add(");\n")
+                        .build();
+
+                return methodBuilder.addCode(code).build();
+            }
+
+            @Override
+            public MethodSpec acceptWrapperDataType() {
+                return MethodSpec
+                        .methodBuilder("to")
+                        .addModifiers(Modifier.PRIVATE)
+                        .returns(stateToClassName)
+                        .addParameter(validator.wrappedClassName(), "state")
+                        .addStatement(
+                                """
+                                        return new $T(
+                                        this.manager,
+                                        this.targetState,
+                                        state
+                                        )""",
+                                stateToClassName
+                        )
+                        .build();
+            }
+        });
 
         MethodSpec triggerDefaultMethod = MethodSpec
                 .methodBuilder("trigger")
@@ -402,13 +455,17 @@ public class StateMachineGenerator extends GenerationBase {
                 .addStatement("return manager.trigger(eventLoop, targetState)")
                 .build();
 
-        TypeSpec type = TypeSpec
+        TypeSpec.Builder typeBuilder = TypeSpec
                 .classBuilder(stateFromClassName)
                 .addModifiers(Modifier.PUBLIC)
                 .addField(managerField)
                 .addField(targetStateField)
-                .addMethod(constructor)
-                .addMethod(toMethod)
+                .addMethod(constructor);
+
+        for (var toMethod : toMethods) {
+            typeBuilder.addMethod(toMethod);
+        }
+        TypeSpec type = typeBuilder
                 .addMethod(triggerDefaultMethod)
                 .addMethod(triggerEventLoopMethod)
                 .build();
@@ -472,20 +529,52 @@ public class StateMachineGenerator extends GenerationBase {
                 .build();
 
         // TODO Generate this/these with visitor pattern
-        MethodSpec constructor = MethodSpec
-                .constructorBuilder()
-                .addModifiers(Modifier.PUBLIC)
-                .addParameter(validator.originalTypeName(), "initialState")
-                .addCode("""
-                                this.currentState = initialState;
-                                this.transitionWhenMap = new $2T<>();
-                                this.transitionCommandMap = new $2T<>();
-                                this.triggerMap = new $2T<>();
-                                this.manager = new $1T();
-                                """,
-                        stateManagerClassName,
-                        HashMap.class)
-                .build();
+        List<MethodSpec> constructors = validator.visitTopLevel(new Validator.Visitor<>() {
+            @Override
+            public MethodSpec acceptUserDataType() {
+                return MethodSpec
+                        .constructorBuilder()
+                        .addModifiers(Modifier.PUBLIC)
+                        .addParameter(validator.originalTypeName(), "initialState")
+                        .addCode("""
+                                        this.currentState = initialState;
+                                        this.transitionWhenMap = new $2T<>();
+                                        this.transitionCommandMap = new $2T<>();
+                                        this.triggerMap = new $2T<>();
+                                        this.manager = new $1T();
+                                        """,
+                                stateManagerClassName,
+                                HashMap.class)
+                        .build();
+            }
+
+            @Override
+            public MethodSpec acceptFields(RecordValidator validator, List<ClassName> fields) {
+                MethodSpec.Builder constructorBuilder = MethodSpec
+                        .constructorBuilder()
+                        .addModifiers(Modifier.PUBLIC);
+
+                for (var type : fields) {
+                    constructorBuilder.addParameter(type, validator.fieldNameMap.get(type));
+                }
+
+                CodeBlock.Builder code = CodeBlock
+                        .builder()
+                        .add("this(new $T(\n", validator.originalTypeName())
+                        .add(validator.emitFieldNames(fields))
+                        .add("));\n");
+
+                constructorBuilder.addCode(code.build());
+
+                return constructorBuilder.build();
+            }
+
+            @Override
+            public MethodSpec acceptWrapperDataType() {
+                // We don't need a state machine constructor that takes the data type we wrap
+                return null;
+            }
+        });
 
         MethodSpec currentStateMethod = MethodSpec
                 .methodBuilder("currentState")
@@ -494,29 +583,128 @@ public class StateMachineGenerator extends GenerationBase {
                 .addStatement("return this.currentState")
                 .build();
 
-        MethodSpec stateMethod = MethodSpec
-                .methodBuilder("state")
-                .addModifiers(Modifier.PUBLIC)
-                .addParameter(stateDataName, "state")
-                .returns(stateFromClassName)
-                .addStatement(
-                        """
-                                return new  $T(
-                                this.manager,
-                                state)""",
-                        stateFromClassName)
-                .build();
+        List<MethodSpec> stateMethods = validator.visitPermutations(new Validator.Visitor<>() {
+            @Override
+            public MethodSpec acceptUserDataType() {
+                CodeBlock dataParameter;
+                if (validator instanceof EnumValidator) {
+                    dataParameter = CodeBlock.of("state");
+                } else if (validator instanceof RecordValidator rv) {
+                    dataParameter = CodeBlock.of("$T.getRecordData(state)", rv.wrappedClassName());
+                } else {
+                    throw new RuntimeException("Unknown validator type");
+                }
 
-        MethodSpec transitionToMethod = MethodSpec
-                .methodBuilder("transitionTo")
-                .addModifiers(Modifier.PUBLIC)
-                .addParameter(stateDataName, "state")
-                .returns(Command.class)
-                .addCode("""
-                                return $T.runOnce(() -> updateState(state)).ignoringDisable(true);
-                                """,
-                        Commands.class)
-                .build();
+                return MethodSpec
+                        .methodBuilder("state")
+                        .addModifiers(Modifier.PUBLIC)
+                        .addParameter(validator.originalTypeName(), "state")
+                        .returns(stateFromClassName)
+                        .addStatement(
+                                """
+                                        return new  $T(
+                                        this.manager,
+                                        $L)""",
+                                stateFromClassName,
+                                dataParameter
+                        )
+                        .build();
+            }
+
+            @Override
+            public MethodSpec acceptFields(RecordValidator validator, List<ClassName> fields) {
+
+                MethodSpec.Builder methodBuilder = MethodSpec
+                        .methodBuilder("state")
+                        .addModifiers(Modifier.PUBLIC)
+                        .returns(stateFromClassName);
+
+                for (var type : fields) {
+                    methodBuilder.addParameter(type, validator.fieldNameMap.get(type));
+                }
+
+                CodeBlock code = CodeBlock
+                        .builder()
+                        .add("return state(\n")
+                        .add(validator.emitDataClass(fields))
+                        .add(");\n")
+                        .build();
+
+                return methodBuilder.addCode(code).build();
+            }
+
+            @Override
+            public MethodSpec acceptWrapperDataType() {
+                // Internal use only for our wrapper method
+                return MethodSpec
+                        .methodBuilder("state")
+                        .addModifiers(Modifier.PRIVATE)
+                        .addParameter(validator.wrappedClassName(), "state")
+                        .returns(stateFromClassName)
+                        .addStatement("return new $T(this.manager, state)", stateFromClassName)
+                        .build();
+            }
+        });
+
+        List<MethodSpec> transitionToMethods = validator.visitPermutations(new Validator.Visitor<MethodSpec>() {
+            @Override
+            public MethodSpec acceptUserDataType() {
+                CodeBlock dataParameter;
+                if (validator instanceof EnumValidator) {
+                    dataParameter = CodeBlock.of(
+                            "return $T.runOnce(() -> updateState(state)).ignoringDisable(true)",
+                            Commands.class
+                    );
+                } else if (validator instanceof RecordValidator rv) {
+                    dataParameter = CodeBlock.of("return transitionTo($T.getRecordData(state))", rv.wrappedClassName());
+                } else {
+                    throw new RuntimeException("Unknown validator type");
+                }
+
+                return MethodSpec
+                        .methodBuilder("transitionTo")
+                        .addModifiers(Modifier.PUBLIC)
+                        .addParameter(validator.originalTypeName(), "state")
+                        .returns(Command.class)
+                        .addStatement(dataParameter)
+                        .build();
+            }
+
+            @Override
+            public MethodSpec acceptFields(RecordValidator validator, List<ClassName> fields) {
+                MethodSpec.Builder methodBuilder = MethodSpec
+                        .methodBuilder("transitionTo")
+                        .addModifiers(Modifier.PUBLIC)
+                        .returns(Command.class);
+
+                for (var type : fields) {
+                    methodBuilder.addParameter(type, validator.fieldNameMap.get(type));
+                }
+
+                CodeBlock code = CodeBlock
+                        .builder()
+                        .add("return transitionTo(\n")
+                        .add(validator.emitDataClass(fields))
+                        .add(");\n")
+                        .build();
+
+                return methodBuilder.addCode(code).build();
+            }
+
+            @Override
+            public MethodSpec acceptWrapperDataType() {
+                return MethodSpec
+                        .methodBuilder("transitionTo")
+                        .addModifiers(Modifier.PRIVATE)
+                        .addParameter(validator.wrappedClassName(), "state")
+                        .returns(Command.class)
+                        .addCode("""
+                                        return $T.runOnce(() -> updateState(state)).ignoringDisable(true);
+                                        """,
+                                Commands.class)
+                        .build();
+            }
+        });
 
         MethodSpec runPollCommandMethod = MethodSpec
                 .methodBuilder("runPollCommand")
@@ -645,26 +833,37 @@ public class StateMachineGenerator extends GenerationBase {
                         """)
                 .build();
 
-        TypeSpec type = TypeSpec
+        TypeSpec.Builder typeBuilder = TypeSpec
                 .classBuilder(stateMachineClassName)
                 .addModifiers(Modifier.PUBLIC)
                 .addField(managerField)
                 .addField(currentStateField)
                 .addField(transitionWhenMap)
                 .addField(transitionCommandMap)
-                .addField(triggerMap)
-                .addMethod(constructor)
-                .addMethod(currentStateMethod)
-                .addMethod(stateMethod)
-                .addMethod(transitionToMethod)
+                .addField(triggerMap);
+
+        for (var constructor : constructors) {
+            typeBuilder.addMethod(constructor);
+        }
+
+        typeBuilder.addMethod(currentStateMethod);
+
+        for (var stateMethod : stateMethods) {
+            typeBuilder.addMethod(stateMethod);
+        }
+
+        for (var transitionToMethod : transitionToMethods) {
+            typeBuilder.addMethod(transitionToMethod);
+        }
+
+        typeBuilder
                 .addMethod(runPollCommandMethod)
                 .addMethod(pollMethod)
                 .addMethod(getNextStateMethod)
                 .addMethod(updateStateMethod)
                 .addMethod(runTransitionCommands)
-                .addType(internalStateManager)
-                .build();
+                .addType(internalStateManager);
 
-        writeType(type);
+        writeType(typeBuilder.build());
     }
 }

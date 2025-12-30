@@ -9,6 +9,9 @@ import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
+import java.util.List;
+import java.util.Objects;
+import java.util.stream.Stream;
 
 public class EnumValidator implements Validator {
     private final ClassName originalTypeName;
@@ -65,5 +68,21 @@ public class EnumValidator implements Validator {
     @Override
     public ClassName wrappedClassName() {
         throw new UnsupportedOperationException("Enum validator does not wrap the class name");
+    }
+
+    @Override
+    public <R> List<R> visitTopLevel(Visitor<R> visitor) {
+        // Just the main type is all that's needed here
+        return Stream.of(
+                visitor.acceptUserDataType()
+        ).filter(Objects::nonNull).toList();
+    }
+
+    @Override
+    public <R> List<R> visitPermutations(Visitor<R> visitor) {
+        // Just the main type is all that's needed here
+        return Stream.of(
+                visitor.acceptUserDataType()
+        ).filter(Objects::nonNull).toList();
     }
 }

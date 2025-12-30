@@ -1,20 +1,21 @@
 package bot.den.state.validator;
 
 import com.palantir.javapoet.ClassName;
+import com.palantir.javapoet.CodeBlock;
 
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.TypeElement;
 import java.util.*;
+import java.util.stream.Stream;
 
 public class RecordValidator implements Validator {
-    private final ClassName originalTypeName;
-    private final ClassName wrappedTypeName;
-
     public final List<ClassName> fieldTypes;
     public final Map<ClassName, String> fieldNameMap;
     public final List<List<ClassName>> permutations;
     public final Map<List<ClassName>, ClassName> innerClassMap;
+    private final ClassName originalTypeName;
+    private final ClassName wrappedTypeName;
 
     public RecordValidator(ProcessingEnvironment environment, TypeElement typeElement) {
         originalTypeName = ClassName.get(typeElement);
@@ -123,6 +124,31 @@ public class RecordValidator implements Validator {
         return permutations;
     }
 
+    public CodeBlock emitFieldNames(List<ClassName> fields) {
+        CodeBlock.Builder code = CodeBlock.builder();
+        for (int i = 0; i < fields.size(); i++) {
+            var type = fields.get(i);
+            var name = fieldNameMap.get(type);
+
+            code.add(name);
+            if (i + 1 < fields.size()) {
+                code.add(",");
+            }
+
+            code.add("\n");
+        }
+
+        return code.build();
+    }
+
+    public CodeBlock emitDataClass(List<ClassName> fields) {
+        return CodeBlock.builder()
+                .add("new $T(\n", innerClassMap.get(fields))
+                .add(emitFieldNames(fields))
+                .add(")\n")
+                .build();
+    }
+
     @Override
     public ClassName originalTypeName() {
         return originalTypeName;
@@ -131,5 +157,31 @@ public class RecordValidator implements Validator {
     @Override
     public ClassName wrappedClassName() {
         return wrappedTypeName;
+    }
+
+    @Override
+    public <R> List<R> visitTopLevel(Visitor<R> visitor) {
+        return Stream.of(
+                        visitor.acceptUserDataType(),
+                        visitor.acceptFields(this, fieldTypes),
+                        visitor.acceptWrapperDataType()
+                )
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    @Override
+    public <R> List<R> visitPermutations(Visitor<R> visitor) {
+        List<R> result = new ArrayList<>();
+
+        result.add(visitor.acceptUserDataType());
+
+        for (var types : permutations) {
+            result.add(visitor.acceptFields(this, types));
+        }
+
+        result.add(visitor.acceptWrapperDataType());
+
+        return result.stream().filter(Objects::nonNull).toList();
     }
 }
