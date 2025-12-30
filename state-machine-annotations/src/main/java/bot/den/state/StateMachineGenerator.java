@@ -10,95 +10,29 @@ import edu.wpi.first.wpilibj2.command.button.Trigger;
 
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.lang.model.element.*;
-import javax.lang.model.type.DeclaredType;
-import javax.lang.model.type.TypeKind;
-import javax.lang.model.type.TypeMirror;
-import javax.lang.model.util.Types;
-import javax.tools.Diagnostic;
-import java.io.IOException;
 import java.util.*;
 import java.util.function.BooleanSupplier;
 
-public class StateMachineGenerator {
-    private final ProcessingEnvironment processingEnv;
-    private final Element element;
-
+public class StateMachineGenerator extends GenerationBase {
+    private final StateTranslator translator;
     private final ClassName stateMachineClassName;
     private final ClassName stateManagerClassName;
     private final ClassName stateFromClassName;
     private final ClassName stateToClassName;
     private final TypeName stateType;
 
-    public StateMachineGenerator(ProcessingEnvironment processingEnv, Element element) {
-        this.processingEnv = processingEnv;
-        this.element = element;
+    public StateMachineGenerator(ProcessingEnvironment processingEnv, TypeElement element) {
+        super(processingEnv, element);
 
-        ClassName stateClassName = (ClassName) ClassName.get(element.asType());
-        String simpleStateName = stateClassName.simpleName();
-        stateMachineClassName = stateClassName.peerClass(simpleStateName + "StateMachine");
+        this.translator = new StateTranslator(processingEnv, element);
+        this.stateType = translator.stateType;
+
+        ClassName annotatedClassName = (ClassName) ClassName.get(element.asType());
+        String simpleStateName = annotatedClassName.simpleName();
+        stateMachineClassName = annotatedClassName.peerClass(simpleStateName + "StateMachine");
         stateManagerClassName = stateMachineClassName.nestedClass(simpleStateName + "StateManager");
-        stateFromClassName = stateClassName.peerClass(simpleStateName + "From");
-        stateToClassName = stateClassName.peerClass(simpleStateName + "To");
-        this.stateType = TypeName.get(element.asType());
-
-        // Validate that we've been annotated on classes we care about
-        if (element.getKind() != ElementKind.ENUM) {
-            error("StateMachine annotation must be made on an enum");
-            return;
-        }
-
-        Types util = processingEnv.getTypeUtils();
-
-        // Annotation interface only allows being placed on a class, so this cast is safe.
-        TypeElement typeElement = (TypeElement) element;
-        var interfaces = typeElement.getInterfaces();
-
-        ClassName transitionInterfaceName = ClassName.get(CanTransitionState.class);
-        boolean hasTransitionsInterface = false;
-        for (TypeMirror i : interfaces) {
-            if (i.getKind() != TypeKind.DECLARED) {
-                continue;  // This shouldn't happen, but let's not cast without being sure
-            }
-
-            DeclaredType declaredType = (DeclaredType) i;
-            TypeElement superClass = (TypeElement) util.asElement(declaredType);
-            if (superClass.getKind() != ElementKind.INTERFACE) {
-                continue;  // We only care about interfaces
-            }
-
-            if (!superClass.getQualifiedName().toString().equals(transitionInterfaceName.toString())) {
-                continue;  // This isn't our interface
-            }
-
-            // Now we know it implemented our interface, so we can ignore the message below.
-            hasTransitionsInterface = true;
-
-            // We still need to check correctness
-            var typeArguments = declaredType.getTypeArguments();
-            if (typeArguments.size() != 1) {
-                error("The HasStateTransitions interface should only have one type argument");
-                return;
-            }
-
-            String sameTypeErrorMessage = "HasStateTransitions parameter must be of type " + typeElement.getQualifiedName();
-            TypeMirror genericParameter = typeArguments.get(0);
-            if (genericParameter.getKind() != TypeKind.DECLARED) {
-                error(sameTypeErrorMessage);
-                return;
-            }
-
-            TypeElement interfaceImplementation = (TypeElement) util.asElement(genericParameter);
-            if (!interfaceImplementation.equals(typeElement)) {
-                error(sameTypeErrorMessage);
-                return;
-            }
-
-            // At this point, that enum is correctly implemented
-        }
-
-        if (!hasTransitionsInterface) {
-            error("HasStateTransitions must be implemented for " + typeElement.getQualifiedName());
-        }
+        stateFromClassName = annotatedClassName.peerClass(simpleStateName + "From");
+        stateToClassName = annotatedClassName.peerClass(simpleStateName + "To");
     }
 
     public void generate() {
@@ -493,7 +427,7 @@ public class StateMachineGenerator {
                             }
                             for(var supplier : toMap.get(toState)) {
                                 if (supplier.getAsBoolean()) {
-                                    return Optional.of(entry.getKey());  // TODO Test issue where we can transition always to two states
+                                    return Optional.of(entry.getKey());
                                 }
                             }
                         }
@@ -558,35 +492,5 @@ public class StateMachineGenerator {
                 .build();
 
         writeType(type);
-    }
-
-    private void writeType(TypeSpec type) {
-        String packageName = getPackageName(element);
-        JavaFile file = JavaFile.builder(packageName, type).indent("    ").build();
-        try {
-            file.writeTo(processingEnv.getFiler());
-        } catch (IOException e) {
-            error("Failed to write class " + packageName + "." + type.name());
-            e.printStackTrace();
-        }
-    }
-
-    private void error(String error) {
-        error(error, element);
-    }
-
-    private void error(String error, Element element) {
-        processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR, error, element);
-    }
-
-    private static String getPackageName(Element e) {
-        while (e != null) {
-            if (e.getKind().equals(ElementKind.PACKAGE)) {
-                return ((PackageElement) e).getQualifiedName().toString();
-            }
-            e = e.getEnclosingElement();
-        }
-
-        return null;
     }
 }

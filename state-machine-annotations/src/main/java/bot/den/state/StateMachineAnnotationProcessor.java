@@ -24,7 +24,7 @@ public class StateMachineAnnotationProcessor extends AbstractProcessor {
         roundEnv
                 .getElementsAnnotatedWith(annotation)
                 .forEach((element -> {
-                    var generator = new StateMachineGenerator(processingEnv, element);
+                    var generator = new StateMachineGenerator(processingEnv, (TypeElement) element);
                     generator.generate();
                 }));
 
