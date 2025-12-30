@@ -82,11 +82,19 @@ public class StateMachineGenerator extends GenerationBase {
             MethodSpec.Builder recordConstructor = MethodSpec
                     .constructorBuilder();
 
+            // canTransitionTo override
             MethodSpec.Builder canBeComparedMethodBuilder = MethodSpec
                     .methodBuilder("canTransitionTo")
                     .addAnnotation(Override.class)
                     .addModifiers(Modifier.PUBLIC)
                     .returns(boolean.class)
+                    .addParameter(stateData, "data");
+
+            // attemptTransitionTo override
+            MethodSpec.Builder attemptTransitionToBuilder = MethodSpec
+                    .methodBuilder("attemptTransitionTo")
+                    .addAnnotation(Override.class)
+                    .addModifiers(Modifier.PUBLIC)
                     .addParameter(stateData, "data");
 
             for (ClassName typeName : types) {
@@ -104,6 +112,16 @@ public class StateMachineGenerator extends GenerationBase {
                         ),
                         typeName
                 );
+
+                attemptTransitionToBuilder.addCode(
+                        """
+                                $T %1$s = %2$s(data);
+                                if(%1$s != null) this.%1$s.attemptTransitionTo(%1$s);""".formatted(
+                                fieldName,
+                                "get" + ucfirst(fieldName)
+                        ),
+                        typeName
+                );
             }
 
             canBeComparedMethodBuilder.addStatement("return true");
@@ -116,6 +134,7 @@ public class StateMachineGenerator extends GenerationBase {
                     .recordConstructor(recordConstructor.build())
                     .addSuperinterface(stateData)
                     .addMethod(canBeComparedMethodBuilder.build())
+                    .addMethod(attemptTransitionToBuilder.build())
                     .build();
 
             recordInterfaceBuilder.addType(innerClass);
@@ -236,25 +255,11 @@ public class StateMachineGenerator extends GenerationBase {
                 )
                 .build();
 
-        MethodSpec guardInvalidTransitionMethod = MethodSpec
-                .methodBuilder("guardInvalidTransition")
-                .addModifiers(Modifier.PUBLIC)
-                .addParameter(stateDataName, "fromState")
-                .addParameter(stateDataName, "toState")
-                .addCode("""
-                                if(! fromState.canTransitionTo(toState)) {
-                                    throw new $T(fromState, toState);
-                                }
-                                """,
-                        InvalidStateTransition.class)
-                .build();
-
         return TypeSpec
                 .classBuilder(stateManagerClassName)
                 .addMethod(whenMethod)
                 .addMethod(runMethod)
                 .addMethod(triggerMethod)
-                .addMethod(guardInvalidTransitionMethod)
                 .build();
     }
 
@@ -285,7 +290,7 @@ public class StateMachineGenerator extends GenerationBase {
                         this.fromState = fromState;
                         this.toState = toState;
                         
-                        manager.guardInvalidTransition(fromState, toState);
+                        fromState.attemptTransitionTo(toState);
                         """)
                 .build();
 
@@ -411,7 +416,7 @@ public class StateMachineGenerator extends GenerationBase {
                 .build();
 
         FieldSpec currentStateField = FieldSpec
-                .builder(stateDataName, "currentState")
+                .builder(validator.originalTypeName(), "currentState")
                 .addModifiers(Modifier.PRIVATE)
                 .build();
 
@@ -459,10 +464,11 @@ public class StateMachineGenerator extends GenerationBase {
                 .addModifiers(Modifier.PRIVATE)
                 .build();
 
+        // TODO Generate this/these with visitor pattern
         MethodSpec constructor = MethodSpec
                 .constructorBuilder()
                 .addModifiers(Modifier.PUBLIC)
-                .addParameter(stateDataName, "initialState")
+                .addParameter(validator.originalTypeName(), "initialState")
                 .addCode("""
                                 this.currentState = initialState;
                                 this.transitionWhenMap = new $2T<>();
@@ -477,7 +483,7 @@ public class StateMachineGenerator extends GenerationBase {
         MethodSpec currentStateMethod = MethodSpec
                 .methodBuilder("currentState")
                 .addModifiers(Modifier.PUBLIC)
-                .returns(stateDataName)
+                .returns(validator.originalTypeName())
                 .addStatement("return this.currentState")
                 .build();
 
@@ -557,18 +563,59 @@ public class StateMachineGenerator extends GenerationBase {
                 )
                 .build();
 
-        MethodSpec updateStateMethod = MethodSpec
+        MethodSpec.Builder updateStateMethodBuilder = MethodSpec
                 .methodBuilder("updateState")
                 .addModifiers(Modifier.PRIVATE)
-                .addParameter(stateDataName, "nextState")
-                .addCode("""
-                        this.manager.guardInvalidTransition(currentState, nextState);
-                        
-                        runTransitionCommands(nextState);
-                        
-                        this.currentState = nextState;
-                        """)
-                .build();
+                .addParameter(stateDataName, "nextState");
+
+        if (validator instanceof RecordValidator) {
+            updateStateMethodBuilder.addCode("""
+                            var data = $1T.getRecordData(currentState);
+                            data.attemptTransitionTo(nextState);
+                            \n""",
+                    stateDataName
+            );
+        } else {
+            updateStateMethodBuilder.addStatement("currentState.attemptTransitionTo(nextState)");
+        }
+        updateStateMethodBuilder.addStatement("runTransitionCommands(nextState)");
+        updateStateMethodBuilder.addCode("\n");
+
+        if (validator instanceof RecordValidator rv) {
+            for (var type : rv.fieldTypes) {
+                var fieldName = rv.fieldNameMap.get(type);
+                updateStateMethodBuilder.addStatement(
+                        "var %1$sData = $T.get%2$s(nextState)".formatted(
+                                fieldName,
+                                ucfirst(fieldName)
+                        ),
+                        rv.wrappedClassName()
+                );
+            }
+
+            var code = CodeBlock.builder();
+
+            code.add("$[this.currentState = new $T($W", rv.originalTypeName());
+
+            List<ClassName> fieldTypes = rv.fieldTypes;
+            for (int i = 0; i < fieldTypes.size(); i++) {
+                var type = fieldTypes.get(i);
+                var fieldName = rv.fieldNameMap.get(type);
+                code.add("%1$sData == null ? currentState.%1$s() : %1$sData".formatted(fieldName));
+                if (i + 1 != fieldTypes.size()) {
+                    code.add(",");
+                }
+                code.add("\n");
+            }
+
+            code.add(");$]");
+
+            updateStateMethodBuilder.addCode(code.build());
+        } else {
+            updateStateMethodBuilder.addStatement("this.currentState = nextState");
+        }
+
+        MethodSpec updateStateMethod = updateStateMethodBuilder.build();
 
         MethodSpec runTransitionCommands = MethodSpec
                 .methodBuilder("runTransitionCommands")
