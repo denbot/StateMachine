@@ -1,12 +1,12 @@
 package bot.den.state.tests;
 
-import bot.den.state.HasStateTransitions;
+import bot.den.state.CanTransitionState;
 import bot.den.state.StateMachine;
 
 import java.util.Set;
 
 @StateMachine
-public enum BasicEnum implements HasStateTransitions<BasicEnum> {
+public enum BasicEnum implements CanTransitionState<BasicEnum> {
     START,
     STATE_A,
     STATE_B,
@@ -15,13 +15,13 @@ public enum BasicEnum implements HasStateTransitions<BasicEnum> {
     END;
 
     @Override
-    public Set<BasicEnum> validTransitions() {
-        return switch (this) {
+    public boolean canTransitionTo(BasicEnum newState) {
+        return (switch (this) {
             case START -> Set.of(STATE_A);
             case STATE_A -> Set.of(STATE_B, STATE_C);
             case STATE_B, STATE_C -> Set.of(STATE_D);
             case STATE_D -> Set.of(END);
             case END -> Set.of();
-        };
+        }).contains(newState);
     }
 }

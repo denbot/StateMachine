@@ -53,6 +53,7 @@ public class StateMachineGenerator {
         TypeElement typeElement = (TypeElement) element;
         var interfaces = typeElement.getInterfaces();
 
+        ClassName transitionInterfaceName = ClassName.get(CanTransitionState.class);
         boolean hasTransitionsInterface = false;
         for (TypeMirror i : interfaces) {
             if (i.getKind() != TypeKind.DECLARED) {
@@ -65,7 +66,7 @@ public class StateMachineGenerator {
                 continue;  // We only care about interfaces
             }
 
-            if (!superClass.getQualifiedName().toString().equals("bot.den.state.HasStateTransitions")) {
+            if (!superClass.getQualifiedName().toString().equals(transitionInterfaceName.toString())) {
                 continue;  // This isn't our interface
             }
 
@@ -179,8 +180,7 @@ public class StateMachineGenerator {
                 .addParameter(stateType, "fromState")
                 .addParameter(stateType, "toState")
                 .addCode("""
-                                var validTransitionsTo = fromState.validTransitions();
-                                if(validTransitionsTo == null || !validTransitionsTo.contains(toState)) {
+                                if(! fromState.canTransitionTo(toState)) {
                                     throw new $T(fromState, toState);
                                 }
                                 """,
