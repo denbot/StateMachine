@@ -15,6 +15,7 @@ import javax.annotation.processing.ProcessingEnvironment;
 import javax.lang.model.element.*;
 import java.util.*;
 import java.util.function.BooleanSupplier;
+import java.util.stream.Collectors;
 
 public class StateMachineGenerator extends GenerationBase {
     private final ClassName stateMachineClassName;
@@ -28,11 +29,11 @@ public class StateMachineGenerator extends GenerationBase {
     public StateMachineGenerator(ProcessingEnvironment processingEnv, TypeElement element) {
         super(processingEnv, element);
 
-        if(element.getKind() == ElementKind.ENUM) {
+        if (element.getKind() == ElementKind.ENUM) {
             this.validator = new EnumValidator(processingEnv, element);
             this.stateDataName = validator.originalTypeName();
 
-        } else if(element.getKind() == ElementKind.RECORD) {
+        } else if (element.getKind() == ElementKind.RECORD) {
             this.validator = new RecordValidator(processingEnv, element);
             this.stateDataName = validator.wrappedClassName();
 
@@ -49,7 +50,7 @@ public class StateMachineGenerator extends GenerationBase {
     }
 
     public void generate() {
-        if(validator instanceof RecordValidator recordValidator) {
+        if (validator instanceof RecordValidator recordValidator) {
             generateRecordWrapper(recordValidator);
         }
 
@@ -77,7 +78,7 @@ public class StateMachineGenerator extends GenerationBase {
                 .interfaceBuilder(stateData)
                 .addSuperinterface(canTransitionState);
 
-        for (ClassName[] types : recordValidator.permutations) {
+        for (List<ClassName> types : recordValidator.permutations) {
             MethodSpec.Builder recordConstructor = MethodSpec
                     .constructorBuilder();
 
@@ -147,6 +148,24 @@ public class StateMachineGenerator extends GenerationBase {
 
             recordInterfaceBuilder.addMethod(extractorMethodBuilder.build());
         }
+
+        // We'd also like a method that converts from our original record class to the appropriate data class
+        ClassName allFieldsPresentClass = recordValidator.innerClassMap.get(recordValidator.fieldTypes);
+
+        String constructorArgs = recordValidator.fieldTypes
+                .stream()
+                .map(cn -> "data." + recordValidator.fieldNameMap.get(cn) + "()")
+                .collect(Collectors.joining(", "));
+
+        MethodSpec getRecordDataMethod = MethodSpec
+                .methodBuilder("getRecordData")
+                .addModifiers(Modifier.PUBLIC, Modifier.STATIC)
+                .addParameter(recordValidator.originalTypeName(), "data")
+                .returns(recordValidator.wrappedClassName())
+                .addStatement("return new $T(" + constructorArgs + ")", allFieldsPresentClass)
+                .build();
+
+        recordInterfaceBuilder.addMethod(getRecordDataMethod);
 
         writeType(recordInterfaceBuilder.build());
     }

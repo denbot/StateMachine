@@ -31,6 +31,8 @@ public class StateMachineAnnotationProcessor extends AbstractProcessor {
                         generator.generate();
                     } catch (Exception e) {
                         processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR, e.getMessage(), element);
+
+                        throw new RuntimeException(e);
                     }
                 }));
 
