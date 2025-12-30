@@ -649,25 +649,27 @@ public class StateMachineGenerator extends GenerationBase {
         List<MethodSpec> transitionToMethods = validator.visitPermutations(new Validator.Visitor<MethodSpec>() {
             @Override
             public MethodSpec acceptUserDataType() {
-                CodeBlock dataParameter;
                 if (validator instanceof EnumValidator) {
-                    dataParameter = CodeBlock.of(
-                            "return $T.runOnce(() -> updateState(state)).ignoringDisable(true)",
-                            Commands.class
-                    );
-                } else if (validator instanceof RecordValidator rv) {
-                    dataParameter = CodeBlock.of("return transitionTo($T.getRecordData(state))", rv.wrappedClassName());
+                    return MethodSpec
+                            .methodBuilder("transitionTo")
+                            .addModifiers(Modifier.PUBLIC)
+                            .addParameter(validator.originalTypeName(), "state")
+                            .returns(Command.class)
+                            .addStatement("return $T.runOnce(() -> updateState(state)).ignoringDisable(true)", Commands.class)
+                            .build();
+                } else if (validator instanceof RecordValidator) {
+                    /*
+                    We don't make a transitionTo method for a record ad the record could contain the RobotState and the
+                    user should not be able to force that transition. We could theoretically check if the record had a
+                    RobotState as one of its components, but then the method might "disappear" from the user's
+                    perspective. We could ignore the robot state when updating our internal state, but that might be
+                    confusing for the user who either expected that transition to hold or didn't know what value to put
+                    for Robot State.
+                     */
+                    return null;
                 } else {
                     throw new RuntimeException("Unknown validator type");
                 }
-
-                return MethodSpec
-                        .methodBuilder("transitionTo")
-                        .addModifiers(Modifier.PUBLIC)
-                        .addParameter(validator.originalTypeName(), "state")
-                        .returns(Command.class)
-                        .addStatement(dataParameter)
-                        .build();
             }
 
             @Override
