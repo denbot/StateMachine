@@ -477,6 +477,7 @@ public class StateMachineGenerator extends GenerationBase {
         FieldSpec managerField = FieldSpec
                 .builder(stateManagerClassName, "manager")
                 .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
+                .initializer("new $T()", stateManagerClassName)
                 .build();
 
         FieldSpec currentStateField = FieldSpec
@@ -498,7 +499,8 @@ public class StateMachineGenerator extends GenerationBase {
         );
         FieldSpec transitionWhenMap = FieldSpec
                 .builder(transitionWhenMapType, "transitionWhenMap")
-                .addModifiers(Modifier.PRIVATE)
+                .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
+                .initializer("new $T()", HashMap.class)
                 .build();
 
         var transitionCommandMapType = ParameterizedTypeName.get(
@@ -515,7 +517,8 @@ public class StateMachineGenerator extends GenerationBase {
         );
         FieldSpec transitionCommandMap = FieldSpec
                 .builder(transitionCommandMapType, "transitionCommandMap")
-                .addModifiers(Modifier.PRIVATE)
+                .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
+                .initializer("new $T()", HashMap.class)
                 .build();
 
         var triggerMapType = ParameterizedTypeName.get(
@@ -525,7 +528,8 @@ public class StateMachineGenerator extends GenerationBase {
         );
         FieldSpec triggerMap = FieldSpec
                 .builder(triggerMapType, "triggerMap")
-                .addModifiers(Modifier.PRIVATE)
+                .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
+                .initializer("new $T()", HashMap.class)
                 .build();
 
         // TODO Generate this/these with visitor pattern
@@ -536,15 +540,7 @@ public class StateMachineGenerator extends GenerationBase {
                         .constructorBuilder()
                         .addModifiers(Modifier.PUBLIC)
                         .addParameter(validator.originalTypeName(), "initialState")
-                        .addCode("""
-                                        this.currentState = initialState;
-                                        this.transitionWhenMap = new $2T<>();
-                                        this.transitionCommandMap = new $2T<>();
-                                        this.triggerMap = new $2T<>();
-                                        this.manager = new $1T();
-                                        """,
-                                stateManagerClassName,
-                                HashMap.class)
+                        .addStatement("this.currentState = initialState")
                         .build();
             }
 
@@ -560,9 +556,9 @@ public class StateMachineGenerator extends GenerationBase {
 
                 CodeBlock.Builder code = CodeBlock
                         .builder()
-                        .add("this(new $T(\n", validator.originalTypeName())
+                        .add("this(new $T(", validator.originalTypeName())
                         .add(validator.emitFieldNames(fields))
-                        .add("));\n");
+                        .add("));");
 
                 constructorBuilder.addCode(code.build());
 
@@ -600,14 +596,7 @@ public class StateMachineGenerator extends GenerationBase {
                         .addModifiers(Modifier.PUBLIC)
                         .addParameter(validator.originalTypeName(), "state")
                         .returns(stateFromClassName)
-                        .addStatement(
-                                """
-                                        return new  $T(
-                                        this.manager,
-                                        $L)""",
-                                stateFromClassName,
-                                dataParameter
-                        )
+                        .addStatement("return new $T(this.manager, $L)", stateFromClassName,dataParameter)
                         .build();
             }
 
@@ -625,9 +614,9 @@ public class StateMachineGenerator extends GenerationBase {
 
                 CodeBlock code = CodeBlock
                         .builder()
-                        .add("return state(\n")
+                        .add("return state(")
                         .add(validator.emitDataClass(fields))
-                        .add(");\n")
+                        .add(");")
                         .build();
 
                 return methodBuilder.addCode(code).build();
@@ -685,9 +674,9 @@ public class StateMachineGenerator extends GenerationBase {
 
                 CodeBlock code = CodeBlock
                         .builder()
-                        .add("return transitionTo(\n")
+                        .add("return transitionTo(")
                         .add(validator.emitDataClass(fields))
-                        .add(");\n")
+                        .add(");")
                         .build();
 
                 return methodBuilder.addCode(code).build();

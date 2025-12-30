@@ -132,10 +132,8 @@ public class RecordValidator implements Validator {
 
             code.add(name);
             if (i + 1 < fields.size()) {
-                code.add(",");
+                code.add(", ");
             }
-
-            code.add("\n");
         }
 
         return code.build();
@@ -143,9 +141,9 @@ public class RecordValidator implements Validator {
 
     public CodeBlock emitDataClass(List<ClassName> fields) {
         return CodeBlock.builder()
-                .add("new $T(\n", innerClassMap.get(fields))
+                .add("new $T(", innerClassMap.get(fields))
                 .add(emitFieldNames(fields))
-                .add(")\n")
+                .add(")")
                 .build();
     }
 
