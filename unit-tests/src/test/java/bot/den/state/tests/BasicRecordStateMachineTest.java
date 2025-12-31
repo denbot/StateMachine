@@ -45,7 +45,7 @@ public class BasicRecordStateMachineTest {
 
     @Test
     void canTransitionGivenPartialSpecifiers() {
-        this.machine.state(BasicEnum.START).to(BasicEnum.STATE_A).always();
+        this.machine.state(BasicEnum.START).to(BasicEnum.STATE_A).transitionAlways();
 
         // Verify nothing changed
         var state = this.machine.currentState();
@@ -65,7 +65,7 @@ public class BasicRecordStateMachineTest {
 
     @Test
     void canTransitionDifferentComponentsUsingPartialSpecifiers() {
-        this.machine.state(BasicEnum.START).to(TwoStateEnum.B).always();
+        this.machine.state(BasicEnum.START).to(TwoStateEnum.B).transitionAlways();
 
         // Verify nothing changed
         var state = this.machine.currentState();
@@ -89,7 +89,7 @@ public class BasicRecordStateMachineTest {
         this.machine
                 .state(TwoStateEnum.B, BasicEnum.STATE_A)
                 .to(BasicRecord.InnerEnum.CIRCLE)
-                .always();
+                .transitionAlways();
 
         // No transition should occur here
         this.machine.poll();
@@ -196,7 +196,7 @@ public class BasicRecordStateMachineTest {
         this.machine
                 .state(BasicEnum.STATE_A)
                 .to(BasicEnum.STATE_B)
-                .always();
+                .transitionAlways();
 
         // Nothing should happen yet
         this.machine.poll();
@@ -206,7 +206,7 @@ public class BasicRecordStateMachineTest {
         this.machine
                 .state(BasicEnum.START)
                 .to(BasicEnum.STATE_A)
-                .always();
+                .transitionAlways();
 
         // This should transition once to A
         this.machine.poll();

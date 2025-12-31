@@ -71,7 +71,7 @@ public class BasicEnumStateMachineTest {
         BasicEnumStateMachine machine = new BasicEnumStateMachine(BasicEnum.START);
 
         // Set up our state machine transition
-        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).always();
+        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).transitionAlways();
 
         // Test our initial state
         assertEquals(BasicEnum.START, machine.currentState());
@@ -93,7 +93,7 @@ public class BasicEnumStateMachineTest {
         machine
                 .state(BasicEnum.START)
                 .to(BasicEnum.STATE_A)
-                .always()
+                .transitionAlways()
                 .run(
                         Commands.runOnce(() -> test.set(true)).ignoringDisable(true)
                 );
@@ -121,7 +121,7 @@ public class BasicEnumStateMachineTest {
         machine
                 .state(BasicEnum.START)
                 .to(BasicEnum.STATE_A)
-                .always()
+                .transitionAlways()
                 .run(
                         Commands.run(() -> test.set(true)).ignoringDisable(true)
                 );
@@ -160,8 +160,8 @@ public class BasicEnumStateMachineTest {
         BasicEnumStateMachine machine = new BasicEnumStateMachine(BasicEnum.START);
 
         // Set up two transitions to always run
-        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).always();
-        machine.state(BasicEnum.STATE_A).to(BasicEnum.STATE_B).always();
+        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).transitionAlways();
+        machine.state(BasicEnum.STATE_A).to(BasicEnum.STATE_B).transitionAlways();
 
         // Assert that we're at the start state
         assertEquals(BasicEnum.START, machine.currentState());
@@ -191,7 +191,7 @@ public class BasicEnumStateMachineTest {
         Trigger trigger = machine.state(BasicEnum.STATE_A).trigger();
 
         // Ensure `poll` will force a state transition
-        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).always();
+        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).transitionAlways();
 
         assertFalse(trigger.getAsBoolean());
 
@@ -215,7 +215,7 @@ public class BasicEnumStateMachineTest {
                 );
 
         // Ensure `poll` will force a state transition
-        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).always();
+        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).transitionAlways();
 
         machine.poll();
         CommandScheduler.getInstance().run();
@@ -241,7 +241,7 @@ public class BasicEnumStateMachineTest {
                 );
 
         // Ensure `poll` will force a state transition
-        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).always();
+        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).transitionAlways();
 
         machine.poll();
         CommandScheduler.getInstance().run();
@@ -301,7 +301,7 @@ public class BasicEnumStateMachineTest {
         Command command = machine.transitionTo(BasicEnum.STATE_A);
 
         // Always jump from A to B on a machine.poll() call
-        machine.state(BasicEnum.STATE_A).to(BasicEnum.STATE_B).always();
+        machine.state(BasicEnum.STATE_A).to(BasicEnum.STATE_B).transitionAlways();
 
         // Ensure creating the command didn't do anything
         assertEquals(BasicEnum.START, machine.currentState());
@@ -329,7 +329,7 @@ public class BasicEnumStateMachineTest {
         BasicEnumStateMachine machine = new BasicEnumStateMachine(BasicEnum.START);
 
         // Set up our state machine transition
-        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).always();
+        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).transitionAlways();
 
         CommandScheduler.getInstance().run();
 

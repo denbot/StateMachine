@@ -331,7 +331,7 @@ public class StateMachineGenerator extends GenerationBase {
                 .build();
 
         MethodSpec alwaysMethod = MethodSpec
-                .methodBuilder("always")
+                .methodBuilder("transitionAlways")
                 .addModifiers(Modifier.PUBLIC)
                 .returns(stateToClassName)
                 .addStatement("return transitionWhen(() -> true)")
