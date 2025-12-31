@@ -216,6 +216,10 @@ public class StateMachineGenerator extends GenerationBase {
                                 }
                                 
                                 fromStateMap.get(toState).add(booleanSupplier);
+                                
+                                if($1T.this.currentSubData.contains(fromState)) {
+                                    $1T.this.regenerateTransitionWhenCache();
+                                }
                                 """,
                         stateMachineClassName,
                         HashMap.class,
@@ -242,6 +246,10 @@ public class StateMachineGenerator extends GenerationBase {
                                 }
                                 
                                 fromStateMap.get(toState).add(command);
+                                
+                                if($1T.this.currentSubData.contains(fromState)) {
+                                    $1T.this.regenerateCommandCache();
+                                }
                                 """,
                         stateMachineClassName,
                         HashMap.class,
@@ -256,7 +264,7 @@ public class StateMachineGenerator extends GenerationBase {
                 .addParameter(stateDataName, "state")
                 .addCode("""
                                 $1T.this.verifyFromStateEnabled(state);
-
+                                
                                 if(! $1T.this.triggerMap.containsKey(state)) {
                                     var trigger = new Trigger(eventLoop, () -> $1T.this.currentSubData.contains(state));
                                     triggerMap.put(state, trigger);
@@ -516,21 +524,47 @@ public class StateMachineGenerator extends GenerationBase {
                 .initializer("new $T()", HashMap.class)
                 .build();
 
+        var transitionWhenCacheType = ParameterizedTypeName.get(
+                ClassName.get(Map.class),
+                ClassName.get(BooleanSupplier.class),
+                stateDataName
+        );
+
+        FieldSpec transitionWhenCache = FieldSpec
+                .builder(transitionWhenCacheType, "transitionWhenCache")
+                .addModifiers(Modifier.PRIVATE)
+                .initializer("new $T()", HashMap.class)
+                .build();
+
+        ParameterizedTypeName commandListType = ParameterizedTypeName.get(
+                List.class,
+                Command.class
+        );
         var transitionCommandMapType = ParameterizedTypeName.get(
                 ClassName.get(Map.class),
                 stateDataName,
                 ParameterizedTypeName.get(
                         ClassName.get(Map.class),
                         stateDataName,
-                        ParameterizedTypeName.get(
-                                List.class,
-                                Command.class
-                        )
+                        commandListType
                 )
         );
+
         FieldSpec transitionCommandMap = FieldSpec
                 .builder(transitionCommandMapType, "transitionCommandMap")
                 .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
+                .initializer("new $T()", HashMap.class)
+                .build();
+
+        var transitionCommandCacheType = ParameterizedTypeName.get(
+                ClassName.get(Map.class),
+                stateDataName,
+                commandListType
+        );
+
+        FieldSpec transitionCommandCache = FieldSpec
+                .builder(transitionCommandCacheType, "transitionCommandCache")
+                .addModifiers(Modifier.PRIVATE)
                 .initializer("new $T()", HashMap.class)
                 .build();
 
@@ -539,6 +573,7 @@ public class StateMachineGenerator extends GenerationBase {
                 stateDataName,
                 ClassName.get(Trigger.class)
         );
+
         FieldSpec triggerMap = FieldSpec
                 .builder(triggerMapType, "triggerMap")
                 .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
@@ -763,18 +798,9 @@ public class StateMachineGenerator extends GenerationBase {
                 .addModifiers(Modifier.PRIVATE)
                 .returns(stateDataName)
                 .addCode("""
-                        if (!transitionWhenMap.containsKey(currentState)) {
-                            return null;
-                        }
-                        
-                        var toMap = transitionWhenMap.get(currentState);
-                        for(var entry : toMap.entrySet()) {
-                            var toState = entry.getKey();
-                        
-                            for(var supplier : toMap.get(toState)) {
-                                if (supplier.getAsBoolean()) {
-                                    return entry.getKey();
-                                }
+                        for(var supplier : this.transitionWhenCache.keySet()) {
+                            if(supplier.getAsBoolean()) {
+                                return this.transitionWhenCache.get(supplier);
                             }
                         }
                         
@@ -786,30 +812,28 @@ public class StateMachineGenerator extends GenerationBase {
         MethodSpec.Builder updateStateMethodBuilder = MethodSpec
                 .methodBuilder("updateState")
                 .addModifiers(Modifier.PRIVATE)
-                .addParameter(stateDataName, "nextState");
+                .addParameter(stateDataName, "nextStateData");
 
         if (validator instanceof RecordValidator) {
             updateStateMethodBuilder.addCode("""
                             var data = $1T.getRecordData(currentState);
-                            data.attemptTransitionTo(nextState);
+                            data.attemptTransitionTo(nextStateData);
                             \n""",
                     stateDataName
             );
         } else {
-            updateStateMethodBuilder.addStatement("currentState.attemptTransitionTo(nextState)");
+            updateStateMethodBuilder.addStatement("currentState.attemptTransitionTo(nextStateData)");
         }
-        updateStateMethodBuilder.addStatement("runTransitionCommands(nextState)");
-        updateStateMethodBuilder.addCode("\n");
 
         // Create new data instance or just assign the state manually depending on type
-        if(validator instanceof EnumValidator) {
+        if (validator instanceof EnumValidator) {
             updateStateMethodBuilder
-                    .addStatement("this.currentState = nextState");
+                    .addStatement("var nextState = nextStateData");
         } else if (validator instanceof RecordValidator rv) {
             for (var type : rv.fieldTypes) {
                 var fieldName = rv.fieldNameMap.get(type);
                 updateStateMethodBuilder.addStatement(
-                        "var $1LData = $3T.get$2L(nextState)",
+                        "var $1LData = $3T.get$2L(nextStateData)",
                         fieldName,
                         ucfirst(fieldName),
                         rv.wrappedClassName()
@@ -818,7 +842,7 @@ public class StateMachineGenerator extends GenerationBase {
 
             var code = CodeBlock.builder();
 
-            code.add("$[this.currentState = new $T($W", rv.originalTypeName());
+            code.add("$[var nextState = new $T($W", rv.originalTypeName());
 
             List<ClassName> fieldTypes = rv.fieldTypes;
             for (int i = 0; i < fieldTypes.size(); i++) {
@@ -837,28 +861,29 @@ public class StateMachineGenerator extends GenerationBase {
         }
 
         updateStateMethodBuilder
-                .addStatement("this.currentSubData = generateFromSubDataStates(this.currentState)");
+                .addStatement("var nextStates = generateToSubDataStates(nextState)")
+                .addStatement("runTransitionCommands(nextStates)")
+                .addStatement("this.currentState = nextState")
+                .addStatement("this.currentSubData = generateFromSubDataStates(this.currentState)")
+                .addStatement("this.regenerateTransitionWhenCache()")
+                .addStatement("this.regenerateCommandCache()");
 
         MethodSpec updateStateMethod = updateStateMethodBuilder.build();
 
         MethodSpec runTransitionCommands = MethodSpec
                 .methodBuilder("runTransitionCommands")
                 .addModifiers(Modifier.PRIVATE)
-                .addParameter(stateDataName, "nextState")
+                .addParameter(subDataSetType, "nextStates")
                 .addCode("""
-                        if (! transitionCommandMap.containsKey(currentState)) {
-                            return;
-                        }
+                        nextStates.forEach(state -> {
+                            if(! transitionCommandCache.containsKey(state)) {
+                                return;
+                            }
                         
-                        var toMap = transitionCommandMap.get(currentState);
-                        if(! toMap.containsKey(nextState)) {
-                            return;
-                        }
-                        
-                        var commands = toMap.get(nextState);
-                        for(var command : commands) {
-                            $T.getInstance().schedule(command);
-                        }
+                            for(var command : transitionCommandCache.get(state)) {
+                                $1T.getInstance().schedule(command);
+                            }
+                        });
                         """, CommandScheduler.class)
                 .build();
 
@@ -944,6 +969,59 @@ public class StateMachineGenerator extends GenerationBase {
                     generateSubDataStatesMethods.add(generateSubDataStateBuilder.build());
                 });
 
+        MethodSpec regenerateTransitionWhenCacheMethod = MethodSpec
+                .methodBuilder("regenerateTransitionWhenCache")
+                .addModifiers(Modifier.PRIVATE)
+                .addCode("""
+                                this.transitionWhenCache = new $1T<>();
+                                
+                                this.currentSubData.forEach(state -> {
+                                    if(! this.transitionWhenMap.containsKey(state)) {
+                                        return;
+                                    }
+                                
+                                
+                                    for(var entry : this.transitionWhenMap.get(state).entrySet()) {
+                                        for(var supplier : entry.getValue()) {
+                                            this.transitionWhenCache.put(supplier, entry.getKey());
+                                        }
+                                    }
+                                });
+                                """,
+                        HashMap.class)
+                .build();
+
+        MethodSpec regenerateCommandCacheMethod = MethodSpec
+                .methodBuilder("regenerateCommandCache")
+                .addModifiers(Modifier.PRIVATE)
+                .addCode("""
+                                this.transitionCommandCache = new $1T<>();
+                                
+                                this.currentSubData.forEach(state -> {
+                                    if (!this.transitionCommandMap.containsKey(state)) {
+                                        return;
+                                    }
+                                
+                                    for(var entry : this.transitionCommandMap.get(state).entrySet()) {
+                                        var toState = entry.getKey();
+                                
+                                        $2T commandList;
+                                        if(this.transitionCommandCache.containsKey(toState)) {
+                                            commandList = this.transitionCommandCache.get(toState);
+                                        } else {
+                                            commandList = new $3T<>();
+                                            this.transitionCommandCache.put(toState, commandList);
+                                        }
+                                
+                                        commandList.addAll(entry.getValue());
+                                    }
+                                });
+                                """,
+                        HashMap.class,
+                        commandListType,
+                        ArrayList.class)
+                .build();
+
         TypeSpec.Builder typeBuilder = TypeSpec
                 .classBuilder(stateMachineClassName)
                 .addModifiers(Modifier.PUBLIC)
@@ -951,7 +1029,9 @@ public class StateMachineGenerator extends GenerationBase {
                 .addField(currentStateField)
                 .addField(currentSubDataField)
                 .addField(transitionWhenMap)
+                .addField(transitionWhenCache)
                 .addField(transitionCommandMap)
+                .addField(transitionCommandCache)
                 .addField(triggerMap);
 
         // We want to add these boolean values to the state machine, but straight from the map they're out of order.
@@ -992,6 +1072,10 @@ public class StateMachineGenerator extends GenerationBase {
         for (var generateSubDataStatesMethod : generateSubDataStatesMethods) {
             typeBuilder.addMethod(generateSubDataStatesMethod);
         }
+
+        typeBuilder
+                .addMethod(regenerateTransitionWhenCacheMethod)
+                .addMethod(regenerateCommandCacheMethod);
 
         typeBuilder.addType(internalStateManager);
 
