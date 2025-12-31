@@ -13,7 +13,8 @@ public class RecordValidator implements Validator {
     public final List<ClassName> fieldTypes;
     public final Map<ClassName, String> fieldNameMap;
     public final List<List<ClassName>> permutations;
-    public final Map<List<ClassName>, ClassName> innerClassMap;
+    public final Map<List<ClassName>, ClassName> fieldToInnerClass;
+    public final Map<ClassName, List<ClassName>> innerClassToField;
     private final ClassName originalTypeName;
     private final ClassName wrappedTypeName;
 
@@ -57,13 +58,15 @@ public class RecordValidator implements Validator {
 
         permutations = getPermutations(fieldTypes);
 
-        innerClassMap = new HashMap<>();
+        fieldToInnerClass = new HashMap<>();
+        innerClassToField = new HashMap<>();
 
         int counter = 0;
         for (var types : permutations) {
             ClassName nestedName = wrappedTypeName.nestedClass("S_" + counter);
 
-            innerClassMap.put(types, nestedName);
+            fieldToInnerClass.put(types, nestedName);
+            innerClassToField.put(nestedName, types);
             counter++;
         }
     }
@@ -141,10 +144,14 @@ public class RecordValidator implements Validator {
 
     public CodeBlock emitDataClass(List<ClassName> fields) {
         return CodeBlock.builder()
-                .add("new $T(", innerClassMap.get(fields))
+                .add("new $T(", fieldToInnerClass.get(fields))
                 .add(emitFieldNames(fields))
                 .add(")")
                 .build();
+    }
+
+    public CodeBlock emitDataClass(ClassName innerClassName) {
+        return emitDataClass(innerClassToField.get(innerClassName));
     }
 
     @Override
