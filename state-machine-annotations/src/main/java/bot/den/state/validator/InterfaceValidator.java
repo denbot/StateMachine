@@ -86,7 +86,7 @@ public class InterfaceValidator implements Validator {
                                 if(! ourClass.equals(theirClass) && this.data instanceof $2T transition) {
                                     return transition.canTransitionType(data.data);
                                 }
-                                return false;
+                                return true;
                                 """,
                         LimitsStateTransitions.class,
                         LimitsTypeTransitions.class)

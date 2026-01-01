@@ -375,4 +375,125 @@ public class BasicEnumStateMachineTest {
 
         assertThrows(InvalidStateTransition.class, machine::poll);
     }
+
+    @Test
+    void multipleRunCommandsOnSameTransition() {
+        var machine = new BasicEnumStateMachine(BasicEnum.START);
+
+        final AtomicBoolean first = new AtomicBoolean(false);
+        final AtomicBoolean second = new AtomicBoolean(false);
+
+        // Set up two commands on the same transition
+        machine
+                .state(BasicEnum.START)
+                .to(BasicEnum.STATE_A)
+                .transitionAlways()
+                .run(Commands.runOnce(() -> first.set(true)).ignoringDisable(true));
+
+        machine
+                .state(BasicEnum.START)
+                .to(BasicEnum.STATE_A)
+                .run(Commands.runOnce(() -> second.set(true)).ignoringDisable(true));
+
+        machine.poll();
+
+        // Both commands should have been scheduled
+        assertTrue(first.get());
+        assertTrue(second.get());
+        assertEquals(BasicEnum.STATE_A, machine.currentState());
+    }
+
+    @Test
+    void multipleTransitionWhenOnSameTransition() {
+        var machine = new BasicEnumStateMachine(BasicEnum.START);
+
+        final AtomicBoolean firstCondition = new AtomicBoolean(false);
+        final AtomicBoolean secondCondition = new AtomicBoolean(false);
+
+        // Set up multiple conditions for the same transition
+        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).transitionWhen(firstCondition::get);
+        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).transitionWhen(secondCondition::get);
+
+        // Neither condition is true yet
+        machine.poll();
+        assertEquals(BasicEnum.START, machine.currentState());
+
+        // Enable one condition
+        firstCondition.set(true);
+        machine.poll();
+        assertEquals(BasicEnum.STATE_A, machine.currentState());
+    }
+
+    @Test
+    void canAddTransitionWhileMachineIsRunning() {
+        var machine = new BasicEnumStateMachine(BasicEnum.START);
+
+        // Set up first transition
+        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).transitionAlways();
+
+        machine.poll();
+        assertEquals(BasicEnum.STATE_A, machine.currentState());
+
+        // Add a new transition dynamically
+        machine.state(BasicEnum.STATE_A).to(BasicEnum.STATE_B).transitionAlways();
+
+        machine.poll();
+        assertEquals(BasicEnum.STATE_B, machine.currentState());
+    }
+
+    @Test
+    void addingTransitionFromCurrentStateActivatesImmediately() {
+        var machine = new BasicEnumStateMachine(BasicEnum.START);
+
+        final AtomicBoolean condition = new AtomicBoolean(true);
+
+        // Add transition while already in the starting state
+        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).transitionWhen(condition::get);
+
+        // Should transition immediately on next poll
+        machine.poll();
+        assertEquals(BasicEnum.STATE_A, machine.currentState());
+    }
+
+    @Test
+    void triggerDeactivatesWhenLeavingState() {
+        var machine = new BasicEnumStateMachine(BasicEnum.START);
+
+        // Create trigger for initial state
+        var trigger = machine.state(BasicEnum.START).trigger();
+
+        assertTrue(trigger.getAsBoolean());
+
+        // Transition away from START
+        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).transitionAlways();
+        machine.poll();
+
+        assertFalse(trigger.getAsBoolean());
+
+        // Transition back to START
+        var command = machine.transitionTo(BasicEnum.START);
+        CommandScheduler.getInstance().schedule(command);
+
+        assertTrue(trigger.getAsBoolean());
+    }
+
+    @Test
+    void multipleTriggersSameMachine() {
+        var machine = new BasicEnumStateMachine(BasicEnum.START);
+
+        // Create triggers for different states
+        var startTrigger = machine.state(BasicEnum.START).trigger();
+        var aTrigger = machine.state(BasicEnum.STATE_A).trigger();
+
+        assertTrue(startTrigger.getAsBoolean());
+        assertFalse(aTrigger.getAsBoolean());
+
+        // Transition to STATE_A
+        machine.state(BasicEnum.START).to(BasicEnum.STATE_A).transitionAlways();
+        machine.poll();
+
+        // Only the STATE_A trigger should be active
+        assertFalse(startTrigger.getAsBoolean());
+        assertTrue(aTrigger.getAsBoolean());
+    }
 }

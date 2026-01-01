@@ -488,11 +488,10 @@ public class RecordValidator implements Validator {
                     .addModifiers(Modifier.PUBLIC, Modifier.STATIC)
                     .addParameter(wrappedTypeName, "data")
                     .returns(originalTypeName)
-                    .beginControlFlow("if (data instanceof $T)", allFieldsPresentClass)
-                    .addStatement("throw new $1T(\"Should not have tried converting this class to a record, we don't have all the information required\")", RuntimeException.class)
-                    .endControlFlow()
-                    .addStatement("$1T castData = ($1T) data", allFieldsPresentClass)
+                    .beginControlFlow("if (data instanceof $T castData)", allFieldsPresentClass)
                     .addStatement("return new $1T($2L)", originalTypeName, commaSeparate(arguments))
+                    .endControlFlow()
+                    .addStatement("throw new $1T(\"Should not have tried converting this class to a record, we don't have all the information required\")", RuntimeException.class)
                     .build();
 
             recordInterfaceBuilder.addMethod(toRecordMethod);

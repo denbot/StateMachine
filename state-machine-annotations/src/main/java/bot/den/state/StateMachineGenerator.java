@@ -886,13 +886,14 @@ public class StateMachineGenerator {
         updateStateMethodBuilder
                 .addCode("""
                                 var nextStates = generateToSubDataStates(nextState);
-                                runTransitionCommands(nextStates);
                                 
                                 if(! $1T.disjoint(failLoudlyCache, nextStates)) {
                                     var failLoudly = new $2T("State transition was requested to fail loudly");
                                 
                                     throw new $3T(currentState, nextState, failLoudly);
                                 }
+                                
+                                runTransitionCommands(nextStates);
                                 
                                 this.currentState = nextState;
                                 currentStateTopic.set(currentState.toString());

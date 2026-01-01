@@ -1,7 +1,9 @@
 package bot.den.state.tests;
 
+import bot.den.state.exceptions.InvalidStateTransition;
 import edu.wpi.first.hal.HAL;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
+import edu.wpi.first.wpilibj2.command.Commands;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -214,5 +216,42 @@ public class BasicRecordStateMachineTest {
         // This should transition once more to B
         this.machine.poll();
         assertEquals(BasicEnum.STATE_B, this.machine.currentState().basic());
+    }
+
+    @Test
+    void failLoudlyOnPartialRecordTransition() {
+        // Set up failLoudly on a partial state match
+        this.machine
+                .state(BasicEnum.START)
+                .to(BasicEnum.STATE_A)
+                .failLoudly();
+
+        // Force the transition and expect it to fail
+        assertThrows(InvalidStateTransition.class,
+                () -> CommandScheduler.getInstance().schedule(this.machine.transitionTo(BasicEnum.STATE_A)));
+    }
+
+    @Test
+    void failLoudlyWithRunCommand() {
+        final AtomicBoolean commandRan = new AtomicBoolean(false);
+
+        // Set up transition with run command
+        this.machine
+                .state(BasicEnum.START)
+                .to(BasicEnum.STATE_A)
+                .transitionAlways()
+                .run(Commands.runOnce(() -> commandRan.set(true)).ignoringDisable(true));
+
+        // Set up failLoudly on the same transition
+        this.machine
+                .state(BasicEnum.START)
+                .to(BasicEnum.STATE_A)
+                .failLoudly();
+
+        // Transition should fail
+        assertThrows(InvalidStateTransition.class, this.machine::poll);
+
+        // Command should not run when failLoudly prevents the transition
+        assertFalse(commandRan.get());
     }
 }
