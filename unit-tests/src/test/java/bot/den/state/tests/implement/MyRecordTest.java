@@ -115,4 +115,65 @@ public class MyRecordTest {
         assertTrue(test.get());
         assertEquals(Shapes.CIRCLE, machine.currentState().field());
     }
+
+    @Test
+    void sandwichCanTransitionTypeBlocksFlavors() {
+        var machine = new MyRecordStateMachine(new Sandwich(true));
+
+        // Sandwich.canTransitionType blocks transitions to Flavors
+        assertThrows(InvalidStateTransition.class, () -> machine.state(new Sandwich(true)).to(Flavors.Chocolate));
+    }
+
+    @Test
+    void sandwichCanTransitionTypeAllowsOtherTypes() {
+        var machine = new MyRecordStateMachine(new Sandwich(true));
+
+        // Sandwich.canTransitionType allows transitions to non-Flavors
+        var command = machine.transitionTo(Shapes.CIRCLE);
+        CommandScheduler.getInstance().schedule(command);
+
+        assertEquals(Shapes.CIRCLE, machine.currentState().field());
+    }
+
+    @Test
+    void sandwichCanTransitionStateAllowsValidTransitions() {
+        var machine = new MyRecordStateMachine(new Sandwich(false));
+
+        // Transition to another Sandwich where isASandwich is true
+        var command = machine.transitionTo(new Sandwich(true));
+        CommandScheduler.getInstance().schedule(command);
+
+        assertEquals(new Sandwich(true), machine.currentState().field());
+    }
+
+    @Test
+    void sandwichCanTransitionStateBlocksInvalidTransitions() {
+        var machine = new MyRecordStateMachine(new Sandwich(true));
+
+        // Transition to a Sandwich where isASandwich is false should fail
+        assertThrows(InvalidStateTransition.class,
+                () -> CommandScheduler.getInstance().schedule(machine.transitionTo(new Sandwich(false))));
+    }
+
+    @Test
+    void sandwichToSandwichTransitionWithTransitionWhen() {
+        var machine = new MyRecordStateMachine(new Sandwich(false));
+
+        final AtomicBoolean test = new AtomicBoolean(false);
+
+        // Set up conditional transition between Sandwich states
+        machine
+                .state(new Sandwich(false))
+                .to(new Sandwich(true))
+                .transitionWhen(test::get);
+
+        machine.poll();
+        assertEquals(new Sandwich(false), machine.currentState().field());
+
+        test.set(true);
+        machine.poll();
+
+        // Verify transition occurred
+        assertEquals(new Sandwich(true), machine.currentState().field());
+    }
 }
