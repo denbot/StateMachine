@@ -1,6 +1,5 @@
 package bot.den.state;
 
-import bot.den.state.exceptions.InvalidStateTransition;
 import bot.den.state.validator.EnumValidator;
 import bot.den.state.validator.RecordValidator;
 import bot.den.state.validator.Validator;
@@ -16,7 +15,7 @@ import javax.annotation.processing.ProcessingEnvironment;
 import javax.lang.model.element.*;
 import java.util.*;
 import java.util.function.BooleanSupplier;
-import java.util.stream.Collectors;
+import java.util.function.Function;
 
 public class StateMachineGenerator extends GenerationBase {
     private final ClassName stateMachineClassName;
@@ -58,7 +57,9 @@ public class StateMachineGenerator extends GenerationBase {
 
     public void generate() {
         if (validator instanceof RecordValidator recordValidator) {
-            generateRecordWrapper(recordValidator);
+            for(var type : recordValidator.typesToWrite) {
+                writeType(type);
+            }
         }
 
         TypeSpec internalStateManager = createInternalStateManager();
@@ -66,140 +67,6 @@ public class StateMachineGenerator extends GenerationBase {
         generateToClass();
         generateFromClass();
         generateStateMachineClass(internalStateManager);
-    }
-
-    private void generateRecordWrapper(RecordValidator recordValidator) {
-        // This is our new Data class' name.
-        ClassName stateData = recordValidator.wrappedClassName();
-
-        ParameterizedTypeName canTransitionState = ParameterizedTypeName
-                .get(
-                        ClassName.get(CanTransitionState.class),
-                        recordValidator.wrappedClassName()
-                );
-
-        /*
-         We're going to build a new wrapper around this interface class that is itself a bunch of records that
-         implement that interface.
-        */
-        TypeSpec.Builder recordInterfaceBuilder = TypeSpec
-                .interfaceBuilder(stateData)
-                .addSuperinterface(canTransitionState);
-
-        for (List<ClassName> types : recordValidator.permutations) {
-            MethodSpec.Builder recordConstructor = MethodSpec
-                    .constructorBuilder();
-
-            // canTransitionTo override
-            MethodSpec.Builder canBeComparedMethodBuilder = MethodSpec
-                    .methodBuilder("canTransitionTo")
-                    .addAnnotation(Override.class)
-                    .addModifiers(Modifier.PUBLIC)
-                    .returns(boolean.class)
-                    .addParameter(stateData, "data");
-
-            // attemptTransitionTo override
-            MethodSpec.Builder attemptTransitionToBuilder = MethodSpec
-                    .methodBuilder("attemptTransitionTo")
-                    .addAnnotation(Override.class)
-                    .addModifiers(Modifier.PUBLIC)
-                    .addParameter(stateData, "data")
-                    .beginControlFlow("try");
-
-            for (ClassName typeName : types) {
-                // Add the type parameter to the constructor
-                String fieldName = recordValidator.fieldNameMap.get(typeName);
-                recordConstructor.addParameter(typeName, fieldName);
-
-                canBeComparedMethodBuilder.addCode(
-                        """
-                                $3T $1L = $2L(data);
-                                if($1L != null && !this.$1L.canTransitionTo($1L)) return false;
-                                """,
-                        fieldName,
-                        "get" + ucfirst(fieldName),
-                        typeName
-                );
-
-                attemptTransitionToBuilder.addCode(
-                        """
-                                $3T $1L = $2L(data);
-                                if($1L != null) this.$1L.attemptTransitionTo($1L);""",
-                        fieldName,
-                        "get" + ucfirst(fieldName),
-                        typeName
-                );
-            }
-
-            canBeComparedMethodBuilder.addStatement("return true");
-            attemptTransitionToBuilder
-                    .addCode("\n")
-                    .nextControlFlow("catch ($T ex)", InvalidStateTransition.class)
-                    .addStatement("throw new $T(this, data, ex)", InvalidStateTransition.class)
-                    .endControlFlow();
-
-
-            ClassName nestedName = recordValidator.fieldToInnerClass.get(types);
-
-            TypeSpec innerClass = TypeSpec
-                    .recordBuilder(nestedName)
-                    .addModifiers(Modifier.PUBLIC, Modifier.STATIC)
-                    .recordConstructor(recordConstructor.build())
-                    .addSuperinterface(stateData)
-                    .addMethod(canBeComparedMethodBuilder.build())
-                    .addMethod(attemptTransitionToBuilder.build())
-                    .build();
-
-            recordInterfaceBuilder.addType(innerClass);
-        }
-
-        // Next up, we need a helper method for each of the original record fields that help us with comparing if states can transition
-        for (var recordEntry : recordValidator.fieldNameMap.entrySet()) {
-            var entryType = recordEntry.getKey();
-            var entryName = recordEntry.getValue();
-
-            MethodSpec.Builder extractorMethodBuilder = MethodSpec
-                    .methodBuilder("get" + ucfirst(entryName))
-                    .addModifiers(Modifier.PUBLIC, Modifier.STATIC)
-                    .returns(entryType)
-                    .addParameter(stateData, "data");
-            for (List<ClassName> types : recordValidator.permutations) {
-                if (!types.contains(entryType)) {
-                    continue;
-                }
-
-                var innerClassName = recordValidator.fieldToInnerClass.get(types);
-
-                extractorMethodBuilder.addStatement(
-                        "if (data instanceof $T s) return s." + entryName,
-                        innerClassName
-                );
-            }
-
-            extractorMethodBuilder.addStatement("return null");
-
-            recordInterfaceBuilder.addMethod(extractorMethodBuilder.build());
-        }
-
-        // We'd also like a method that converts from our original record class to the appropriate data class
-        ClassName allFieldsPresentClass = recordValidator.fieldToInnerClass.get(recordValidator.fieldTypes);
-
-        String constructorArgs = recordValidator.fieldTypes
-                .stream()
-                .map(cn -> "data." + recordValidator.fieldNameMap.get(cn) + "()")
-                .collect(Collectors.joining(", "));
-
-        MethodSpec getRecordDataMethod = MethodSpec
-                .methodBuilder("getRecordData")
-                .addModifiers(Modifier.PUBLIC, Modifier.STATIC)
-                .addParameter(recordValidator.originalTypeName(), "data")
-                .returns(recordValidator.wrappedClassName())
-                .addStatement("return new $T(" + constructorArgs + ")", allFieldsPresentClass)
-                .build();
-
-        recordInterfaceBuilder.addMethod(getRecordDataMethod);
-
-        writeType(recordInterfaceBuilder.build());
     }
 
     private TypeSpec createInternalStateManager() {
@@ -691,7 +558,7 @@ public class StateMachineGenerator extends GenerationBase {
                 CodeBlock.Builder code = CodeBlock
                         .builder()
                         .add("this(new $T(", validator.originalTypeName())
-                        .add(validator.emitFieldNames(fields))
+                        .add(validator.emitFieldNames(fields, Function.identity(),  false))
                         .add("));");
 
                 constructorBuilder.addCode(code.build());
@@ -720,7 +587,7 @@ public class StateMachineGenerator extends GenerationBase {
                 if (validator instanceof EnumValidator) {
                     dataParameter = CodeBlock.of("state");
                 } else if (validator instanceof RecordValidator rv) {
-                    dataParameter = CodeBlock.of("$T.getRecordData(state)", rv.wrappedClassName());
+                    dataParameter = CodeBlock.of("$T.fromRecord(state)", rv.wrappedClassName());
                 } else {
                     throw new RuntimeException("Unknown validator type");
                 }
@@ -913,7 +780,7 @@ public class StateMachineGenerator extends GenerationBase {
 
         if (validator instanceof RecordValidator) {
             updateStateMethodBuilder.addCode("""
-                            var data = $1T.getRecordData(currentState);
+                            var data = $1T.fromRecord(currentState);
                             data.attemptTransitionTo(nextStateData);
                             \n""",
                     stateDataName
@@ -922,7 +789,7 @@ public class StateMachineGenerator extends GenerationBase {
             updateStateMethodBuilder.addStatement("currentState.attemptTransitionTo(nextStateData)");
         }
 
-        // Create new data instance or just assign the state manually depending on type
+        // Create a new data instance or just assign the state manually depending on the type
         if (validator instanceof EnumValidator) {
             updateStateMethodBuilder
                     .addStatement("var nextState = nextStateData");
@@ -945,7 +812,14 @@ public class StateMachineGenerator extends GenerationBase {
             for (int i = 0; i < fieldTypes.size(); i++) {
                 var type = fieldTypes.get(i);
                 var fieldName = rv.fieldNameMap.get(type);
-                code.add("$1LData == null ? currentState.$1L() : $1LData", fieldName);
+                var otherData = CodeBlock.of("$1LData", fieldName);
+
+                if(rv.nestedRecords.containsKey(type)) {
+                    var dataType = rv.nestedRecords.get(type);
+                    otherData = CodeBlock.of("$1T.toRecord($2LData)", dataType, fieldName);
+                }
+
+                code.add("$1LData == null ? currentState.$1L() : $2L", fieldName, otherData);
                 if (i + 1 != fieldTypes.size()) {
                     code.add(",");
                 }
@@ -1042,7 +916,7 @@ public class StateMachineGenerator extends GenerationBase {
                                 .addStatement("$1T result = new $2T<>()", subDataSetType, HashSet.class);
 
                         rv.fieldNameMap.forEach(
-                                (className, fieldName) -> generateSubDataStateBuilder.addStatement("$1T $2L = state.$2L()", className, fieldName)
+                                (className, fieldName) -> generateSubDataStateBuilder.addStatement("$1T $2LField = state.$2L()", className, fieldName)
                         );
 
                         fieldMap
@@ -1055,7 +929,7 @@ public class StateMachineGenerator extends GenerationBase {
 
                                     generateSubDataStateBuilder
                                             .beginControlFlow("if(this.$L)", enabledField.name())
-                                            .addStatement("result.add($L)", rv.emitDataClass(innerClassName))
+                                            .addStatement("result.add($L)", rv.emitDataClass(innerClassName, f -> f + "Field"))
                                             .endControlFlow();
                                 });
 

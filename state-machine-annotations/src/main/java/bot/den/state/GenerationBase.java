@@ -67,7 +67,7 @@ public abstract class GenerationBase {
      * @param input The input to adjust
      * @return The input with the first letter uppercase
      */
-    static String ucfirst(String input) {
+    public static String ucfirst(String input) {
         return input.substring(0, 1).toUpperCase() + input.substring(1);
     }
 }
