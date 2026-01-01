@@ -6,6 +6,9 @@ import bot.den.state.validator.EnumValidator;
 import bot.den.state.validator.RecordValidator;
 import bot.den.state.validator.Validator;
 import com.palantir.javapoet.*;
+import edu.wpi.first.networktables.NetworkTableInstance;
+import edu.wpi.first.networktables.StringPublisher;
+import edu.wpi.first.networktables.StringTopic;
 import edu.wpi.first.wpilibj.DSControlWord;
 import edu.wpi.first.wpilibj.event.EventLoop;
 import edu.wpi.first.wpilibj2.command.Command;
@@ -414,6 +417,18 @@ public class StateMachineGenerator {
                 .initializer("new $T()", stateManagerClassName)
                 .build();
 
+        FieldSpec networkTableInstance = FieldSpec
+                .builder(NetworkTableInstance.class, "networkTableInstance")
+                .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
+                .initializer("$T.getDefault()", NetworkTableInstance.class)
+                .build();
+
+        FieldSpec currentStateTopic = FieldSpec
+                .builder(StringPublisher.class, "currentStateTopic")
+                .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
+                .initializer("networkTableInstance.getStringTopic(\"StateMachine/currentState\").publish()")
+                .build();
+
         FieldSpec currentStateField = FieldSpec
                 .builder(validator.originalTypeName(), "currentState")
                 .addModifiers(Modifier.PRIVATE)
@@ -567,8 +582,11 @@ public class StateMachineGenerator {
                         .constructorBuilder()
                         .addModifiers(visibility)
                         .addParameter(validator.originalTypeName(), "initialState")
-                        .addStatement("this.currentState = initialState")
-                        .addStatement("this.currentSubData = this.generateToSubDataStates(initialState)")
+                        .addCode("""
+                                this.currentState = initialState;
+                                this.currentSubData = this.generateToSubDataStates(initialState);
+                                currentStateTopic.set(currentState.toString());
+                                """)
                         .build();
             }
 
@@ -877,6 +895,7 @@ public class StateMachineGenerator {
                                 }
                                 
                                 this.currentState = nextState;
+                                currentStateTopic.set(currentState.toString());
                                 this.currentSubData = generateFromSubDataStates(this.currentState);
                                 this.regenerateTransitionWhenCache();
                                 this.regenerateCommandCache();
@@ -1061,6 +1080,8 @@ public class StateMachineGenerator {
                 .classBuilder(stateMachineClassName)
                 .addModifiers(Modifier.PUBLIC)
                 .addField(managerField)
+                .addField(networkTableInstance)
+                .addField(currentStateTopic)
                 .addField(currentStateField)
                 .addField(currentSubDataField)
                 .addField(transitionWhenMap)

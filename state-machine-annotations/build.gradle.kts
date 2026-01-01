@@ -20,6 +20,7 @@ dependencies {
 
     implementation("edu.wpi.first.wpilibj:wpilibj-java:${wpilibVersion}")
     implementation("edu.wpi.first.wpiutil:wpiutil-java:${wpilibVersion}")
+    implementation("edu.wpi.first.ntcore:ntcore-java:${wpilibVersion}")
     implementation("edu.wpi.first.wpilibNewCommands:wpilibNewCommands-java:${wpilibVersion}")
     implementation("edu.wpi.first.wpilibNewCommands:wpilibNewCommands-cpp:${wpilibVersion}")
 }
