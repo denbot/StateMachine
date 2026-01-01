@@ -2,6 +2,7 @@ package bot.den.state.validator;
 
 import bot.den.state.LimitsStateTransitions;
 import bot.den.state.Environment;
+import bot.den.state.LimitsTypeTransitions;
 import bot.den.state.Util;
 import com.palantir.javapoet.ClassName;
 import com.palantir.javapoet.MethodSpec;
@@ -70,19 +71,25 @@ public class InterfaceValidator implements Validator {
                 .addStatement("return new $1T(data)", wrappedTypeName)
                 .build();
 
-        MethodSpec canTransitionTo = MethodSpec
-                .methodBuilder("canTransitionTo")
+        MethodSpec canTransitionState = MethodSpec
+                .methodBuilder("canTransitionState")
                 .addAnnotation(Override.class)
                 .addModifiers(Modifier.PUBLIC)
                 .returns(boolean.class)
                 .addParameter(wrappedTypeName, "data")
                 .addCode("""
-                        if(this.data.getClass().equals(data.getClass()) && this.data instanceof $T transition) {
-                            return transition.canTransitionTo(data);
-                        }
-                        return false;
-                        """,
-                        LimitsStateTransitions.class)
+                                Class ourClass = this.data.getClass();
+                                Class theirClass = data.data.getClass();
+                                if(ourClass.equals(theirClass) && this.data instanceof $1T transition) {
+                                    return transition.canTransitionState(data.data);
+                                }
+                                if(! ourClass.equals(theirClass) && this.data instanceof $2T transition) {
+                                    return transition.canTransitionType(data.data);
+                                }
+                                return false;
+                                """,
+                        LimitsStateTransitions.class,
+                        LimitsTypeTransitions.class)
                 .build();
 
         return TypeSpec
@@ -90,7 +97,7 @@ public class InterfaceValidator implements Validator {
                 .addSuperinterface(limitsStateTransitions)
                 .recordConstructor(constructor)
                 .addMethod(fromRecord)
-                .addMethod(canTransitionTo)
+                .addMethod(canTransitionState)
                 .build();
     }
 }

@@ -4,11 +4,6 @@ import bot.den.state.LimitsStateTransitions;
 import bot.den.state.Environment;
 import com.palantir.javapoet.ClassName;
 
-import javax.lang.model.element.ElementKind;
-import javax.lang.model.element.TypeElement;
-import javax.lang.model.type.DeclaredType;
-import javax.lang.model.type.TypeKind;
-import javax.lang.model.type.TypeMirror;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -22,45 +17,7 @@ public class EnumValidator implements Validator {
         var typeElement = environment.element();
         originalTypeName = ClassName.get(typeElement);
 
-        var typeUtils = environment.processingEnvironment().getTypeUtils();
-
-        ClassName transitionStateClassName = ClassName.get(LimitsStateTransitions.class);
-
-        var interfaces = typeElement.getInterfaces();
-        for (TypeMirror i : interfaces) {
-            DeclaredType declaredType = (DeclaredType) i;
-            TypeElement superClass = (TypeElement) typeUtils.asElement(declaredType);
-            if (superClass.getKind() != ElementKind.INTERFACE) {
-                continue;  // We only care about interfaces
-            }
-
-            if (!superClass.getQualifiedName().toString().equals(transitionStateClassName.toString())) {
-                continue;  // This isn't our interface
-            }
-
-            // We still need to check correctness
-            var typeArguments = declaredType.getTypeArguments();
-            if (typeArguments.size() != 1) {
-                throw new RuntimeException("The " + transitionStateClassName.simpleName() + " interface should only have one type argument");
-            }
-
-            String sameTypeErrorMessage = transitionStateClassName.simpleName() + " parameter must be of type " + typeElement;
-            TypeMirror genericParameter = typeArguments.get(0);
-            if (genericParameter.getKind() != TypeKind.DECLARED) {
-                throw new RuntimeException(sameTypeErrorMessage);
-            }
-
-            TypeElement interfaceImplementation = (TypeElement) typeUtils.asElement(genericParameter);
-            if (!interfaceImplementation.equals(typeElement)) {
-                throw new RuntimeException(sameTypeErrorMessage);
-            }
-
-            // At this point, that enum is correctly implemented
-            implementsStateTransitionInterface = true;
-            return;
-        }
-
-        implementsStateTransitionInterface = false;
+        implementsStateTransitionInterface = environment.validlySelfImplements(LimitsStateTransitions.class);
     }
 
     @Override

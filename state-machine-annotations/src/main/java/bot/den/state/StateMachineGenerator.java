@@ -179,7 +179,7 @@ public class StateMachineGenerator {
                 .addModifiers(Modifier.FINAL)
                 .build();
 
-        MethodSpec constructor = MethodSpec
+        MethodSpec.Builder constructorBuilder = MethodSpec
                 .constructorBuilder()
                 .addModifiers(Modifier.PUBLIC)
                 .addParameter(stateManagerClassName, "manager")
@@ -189,10 +189,13 @@ public class StateMachineGenerator {
                         this.manager = manager;
                         this.fromState = fromState;
                         this.toState = toState;
-                        
-                        fromState.attemptTransitionTo(toState);
-                        """)
-                .build();
+                        """);
+
+        if(validator.supportsStateTransition()) {
+            constructorBuilder.addStatement("fromState.attemptTransitionTo(toState)");
+        }
+
+        MethodSpec constructor = constructorBuilder.build();
 
         MethodSpec runMethod = MethodSpec
                 .methodBuilder("run")
@@ -783,7 +786,7 @@ public class StateMachineGenerator {
                 .addModifiers(Modifier.PRIVATE)
                 .addParameter(stateDataName, "nextStateData");
 
-        if (validator instanceof RecordValidator) {
+        if (validator instanceof RecordValidator rv && rv.supportsStateTransition()) {
             updateStateMethodBuilder.addCode("""
                             var data = $1T.fromRecord(currentState);
                             data.attemptTransitionTo(nextStateData);

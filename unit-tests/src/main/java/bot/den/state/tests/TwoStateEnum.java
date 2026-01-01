@@ -1,18 +1,11 @@
 package bot.den.state.tests;
 
-import bot.den.state.LimitsStateTransitions;
-
-import java.util.Set;
-
-public enum TwoStateEnum implements LimitsStateTransitions<TwoStateEnum> {
+/**
+ * This enum does not implement any state transition limitations, so the RobotRecord will have two fields that do not
+ * implement any limitations. The resulting record data class should also not generate any methods to limit state
+ * transitions.
+ */
+public enum TwoStateEnum {
     A,
     B;
-
-    @Override
-    public boolean canTransitionTo(TwoStateEnum newState) {
-        return (switch (this) {
-            case A -> Set.of(B);
-            case B -> Set.of(A);
-        }).contains(newState);
-    }
 }

@@ -15,7 +15,7 @@ public enum BasicEnum implements LimitsStateTransitions<BasicEnum> {
     END;
 
     @Override
-    public boolean canTransitionTo(BasicEnum newState) {
+    public boolean canTransitionState(BasicEnum newState) {
         return (switch (this) {
             case START -> Set.of(STATE_A);
             case STATE_A -> Set.of(STATE_B, STATE_C);
