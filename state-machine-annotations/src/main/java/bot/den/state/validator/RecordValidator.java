@@ -1,7 +1,9 @@
 package bot.den.state.validator;
 
 import bot.den.state.CanTransitionState;
+import bot.den.state.Environment;
 import bot.den.state.RobotState;
+import bot.den.state.Util;
 import bot.den.state.exceptions.InvalidStateTransition;
 import com.palantir.javapoet.*;
 
@@ -13,8 +15,6 @@ import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-
-import static bot.den.state.GenerationBase.ucfirst;
 
 public class RecordValidator implements Validator {
     private static final Map<ClassName, Integer> uniqueNameCounter = new HashMap<>();
@@ -32,7 +32,8 @@ public class RecordValidator implements Validator {
     private final ClassName wrappedTypeName;
     private final ClassName robotStateName;
 
-    public RecordValidator(ProcessingEnvironment environment, TypeElement typeElement) {
+    public RecordValidator(Environment environment) {
+        var typeElement = environment.element();
         originalTypeName = ClassName.get(typeElement);
 
         /*
@@ -66,7 +67,7 @@ public class RecordValidator implements Validator {
             wrappedTypeName = uniqueDataClassName;
         }
 
-        var typeUtils = environment.getTypeUtils();
+        var typeUtils = environment.processingEnvironment().getTypeUtils();
 
         var recordComponents = typeElement.getRecordComponents();
 
@@ -79,12 +80,13 @@ public class RecordValidator implements Validator {
                 .stream()
                 .map((e) -> {
                     var element = (TypeElement) typeUtils.asElement(e.asType());
+                    var newEnvironment = environment.forNewElement(element);
 
                     if (element.getKind() == ElementKind.ENUM) {
-                        return new EnumValidator(environment, element);
+                        return new EnumValidator(newEnvironment);
                     } else if (element.getKind() == ElementKind.RECORD) {
                         // Nested record, we have to go deeper!
-                        return new RecordValidator(environment, element);
+                        return new RecordValidator(newEnvironment);
                     } else {
                         throw new RuntimeException("Invalid type " + element.getSimpleName() + " in record " + typeElement.getSimpleName());
                     }
@@ -329,7 +331,7 @@ public class RecordValidator implements Validator {
                                 if($1LField != null && !this.$1L.canTransitionTo($1LField)) return false;
                                 """,
                         fieldName,
-                        "get" + ucfirst(fieldName),
+                        "get" + Util.ucfirst(fieldName),
                         dataTypeName
                 );
 
@@ -339,7 +341,7 @@ public class RecordValidator implements Validator {
                                 if($1LField != null) this.$1L.attemptTransitionTo($1LField);
                                 """,
                         fieldName,
-                        "get" + ucfirst(fieldName),
+                        "get" + Util.ucfirst(fieldName),
                         dataTypeName
                 );
             }
@@ -374,7 +376,7 @@ public class RecordValidator implements Validator {
                 var entryName = recordEntry.getValue();
 
                 MethodSpec.Builder extractorMethodBuilder = MethodSpec
-                        .methodBuilder("get" + ucfirst(entryName))
+                        .methodBuilder("get" + Util.ucfirst(entryName))
                         .addModifiers(Modifier.PUBLIC, Modifier.STATIC)
                         .returns(dataTypeName)
                         .addParameter(wrappedTypeName, "data");

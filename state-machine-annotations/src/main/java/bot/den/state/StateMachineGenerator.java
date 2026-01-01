@@ -17,7 +17,10 @@ import java.util.*;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
-public class StateMachineGenerator extends GenerationBase {
+public class StateMachineGenerator {
+    final ProcessingEnvironment processingEnv;
+    private final Environment environment;
+
     private final ClassName stateMachineClassName;
     private final ClassName stateManagerClassName;
     private final ClassName stateFromClassName;
@@ -29,15 +32,17 @@ public class StateMachineGenerator extends GenerationBase {
 
     private final Validator validator;
 
-    public StateMachineGenerator(ProcessingEnvironment processingEnv, TypeElement element) {
-        super(processingEnv, element);
+    public StateMachineGenerator(Environment environment) {
+        this.environment = environment;
+        this.processingEnv = environment.processingEnvironment();
+        var element = environment.element();
 
         if (element.getKind() == ElementKind.ENUM) {
-            this.validator = new EnumValidator(processingEnv, element);
+            this.validator = new EnumValidator(environment);
             this.stateDataName = validator.originalTypeName();
 
         } else if (element.getKind() == ElementKind.RECORD) {
-            this.validator = new RecordValidator(processingEnv, element);
+            this.validator = new RecordValidator(environment);
             this.stateDataName = validator.wrappedClassName();
 
         } else {
@@ -58,7 +63,7 @@ public class StateMachineGenerator extends GenerationBase {
     public void generate() {
         if (validator instanceof RecordValidator recordValidator) {
             for(var type : recordValidator.typesToWrite) {
-                writeType(type);
+                this.environment.writeType(type);
             }
         }
 
@@ -212,7 +217,7 @@ public class StateMachineGenerator extends GenerationBase {
                 .addMethod(runMethod)
                 .build();
 
-        writeType(type);
+        this.environment.writeType(type);
     }
 
     private void generateToClass() {
@@ -256,7 +261,7 @@ public class StateMachineGenerator extends GenerationBase {
                 .addMethod(alwaysMethod)
                 .build();
 
-        writeType(type);
+        this.environment.writeType(type);
     }
 
     private void generateFromClass() {
@@ -397,7 +402,7 @@ public class StateMachineGenerator extends GenerationBase {
                 .addMethod(triggerEventLoopMethod)
                 .build();
 
-        writeType(type);
+        this.environment.writeType(type);
     }
 
     private void generateStateMachineClass(TypeSpec internalStateManager) {
@@ -799,7 +804,7 @@ public class StateMachineGenerator extends GenerationBase {
                 updateStateMethodBuilder.addStatement(
                         "var $1LData = $3T.get$2L(nextStateData)",
                         fieldName,
-                        ucfirst(fieldName),
+                        Util.ucfirst(fieldName),
                         rv.wrappedClassName()
                 );
             }
@@ -862,7 +867,7 @@ public class StateMachineGenerator extends GenerationBase {
         innerClassEnabledFields
                 .forEach((key, fieldMap) -> {
                     MethodSpec.Builder verifyStateEnabledMethodBuilder = MethodSpec
-                            .methodBuilder("verify" + ucfirst(key) + "StateEnabled")
+                            .methodBuilder("verify" + Util.ucfirst(key) + "StateEnabled")
                             .addModifiers(Modifier.PRIVATE)
                             .addParameter(stateDataName, "state");
 
@@ -902,7 +907,7 @@ public class StateMachineGenerator extends GenerationBase {
         innerClassEnabledFields
                 .forEach((key, fieldMap) -> {
                     MethodSpec.Builder generateSubDataStateBuilder = MethodSpec
-                            .methodBuilder("generate" + ucfirst(key) + "SubDataStates")
+                            .methodBuilder("generate" + Util.ucfirst(key) + "SubDataStates")
                             .addModifiers(Modifier.PRIVATE)
                             .addParameter(validator.originalTypeName(), "state")
                             .returns(subDataSetType);
@@ -1054,6 +1059,6 @@ public class StateMachineGenerator extends GenerationBase {
 
         typeBuilder.addType(internalStateManager);
 
-        writeType(typeBuilder.build());
+        this.environment.writeType(typeBuilder.build());
     }
 }

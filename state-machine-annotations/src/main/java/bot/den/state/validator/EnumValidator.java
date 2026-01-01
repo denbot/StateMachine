@@ -1,9 +1,9 @@
 package bot.den.state.validator;
 
 import bot.den.state.CanTransitionState;
+import bot.den.state.Environment;
 import com.palantir.javapoet.ClassName;
 
-import javax.annotation.processing.ProcessingEnvironment;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
@@ -17,10 +17,11 @@ import java.util.stream.Stream;
 public class EnumValidator implements Validator {
     private final ClassName originalTypeName;
 
-    public EnumValidator(ProcessingEnvironment environment, TypeElement typeElement) {
+    public EnumValidator(Environment environment) {
+        var typeElement = environment.element();
         originalTypeName = ClassName.get(typeElement);
 
-        var typeUtils = environment.getTypeUtils();
+        var typeUtils = environment.processingEnvironment().getTypeUtils();
 
         ClassName transitionStateClassName = ClassName.get(CanTransitionState.class);
 
