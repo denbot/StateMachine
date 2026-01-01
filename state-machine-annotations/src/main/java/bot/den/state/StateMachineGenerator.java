@@ -5,6 +5,7 @@ import bot.den.state.validator.EnumValidator;
 import bot.den.state.validator.RecordValidator;
 import bot.den.state.validator.Validator;
 import com.palantir.javapoet.*;
+import edu.wpi.first.wpilibj.DSControlWord;
 import edu.wpi.first.wpilibj.event.EventLoop;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
@@ -14,7 +15,6 @@ import edu.wpi.first.wpilibj2.command.button.Trigger;
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.lang.model.element.*;
 import java.util.*;
-import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
 import java.util.stream.Collectors;
 
@@ -22,8 +22,11 @@ public class StateMachineGenerator extends GenerationBase {
     private final ClassName stateMachineClassName;
     private final ClassName stateManagerClassName;
     private final ClassName stateFromClassName;
+    private final ClassName stateLimitedToClassName;
     private final ClassName stateToClassName;
     private final ClassName stateDataName;
+
+    private final ClassName robotStateName;
 
     private final Validator validator;
 
@@ -47,7 +50,10 @@ public class StateMachineGenerator extends GenerationBase {
         stateMachineClassName = annotatedClassName.peerClass(simpleStateName + "StateMachine");
         stateManagerClassName = stateMachineClassName.nestedClass(simpleStateName + "StateManager");
         stateFromClassName = annotatedClassName.peerClass(simpleStateName + "From");
+        stateLimitedToClassName = annotatedClassName.peerClass(simpleStateName + "LimitedTo");
         stateToClassName = annotatedClassName.peerClass(simpleStateName + "To");
+
+        robotStateName = ClassName.get(RobotState.class);
     }
 
     public void generate() {
@@ -56,6 +62,7 @@ public class StateMachineGenerator extends GenerationBase {
         }
 
         TypeSpec internalStateManager = createInternalStateManager();
+        generateLimitedToClass();
         generateToClass();
         generateFromClass();
         generateStateMachineClass(internalStateManager);
@@ -284,20 +291,20 @@ public class StateMachineGenerator extends GenerationBase {
                 .build();
     }
 
-    private void generateToClass() {
+    private void generateLimitedToClass() {
         FieldSpec managerField = FieldSpec
                 .builder(stateManagerClassName, "manager")
-                .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
+                .addModifiers(Modifier.FINAL)
                 .build();
 
         FieldSpec fromStateField = FieldSpec
                 .builder(stateDataName, "fromState")
-                .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
+                .addModifiers(Modifier.FINAL)
                 .build();
 
         FieldSpec toStateField = FieldSpec
                 .builder(stateDataName, "toState")
-                .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
+                .addModifiers(Modifier.FINAL)
                 .build();
 
         MethodSpec constructor = MethodSpec
@@ -313,6 +320,42 @@ public class StateMachineGenerator extends GenerationBase {
                         
                         fromState.attemptTransitionTo(toState);
                         """)
+                .build();
+
+        MethodSpec runMethod = MethodSpec
+                .methodBuilder("run")
+                .addModifiers(Modifier.PUBLIC)
+                .addParameter(Command.class, "command")
+                .addStatement("""
+                        this.manager.run(
+                        this.fromState,
+                        this.toState,
+                        command
+                        )"""
+                )
+                .build();
+
+        TypeSpec type = TypeSpec
+                .classBuilder(stateLimitedToClassName)
+                .addModifiers(Modifier.PUBLIC)
+                .addField(managerField)
+                .addField(fromStateField)
+                .addField(toStateField)
+                .addMethod(constructor)
+                .addMethod(runMethod)
+                .build();
+
+        writeType(type);
+    }
+
+    private void generateToClass() {
+        MethodSpec constructor = MethodSpec
+                .constructorBuilder()
+                .addModifiers(Modifier.PUBLIC)
+                .addParameter(stateManagerClassName, "manager")
+                .addParameter(stateDataName, "fromState")
+                .addParameter(stateDataName, "toState")
+                .addStatement("super(manager, fromState, toState)")
                 .build();
 
         MethodSpec whenMethod = MethodSpec
@@ -337,29 +380,13 @@ public class StateMachineGenerator extends GenerationBase {
                 .addStatement("return transitionWhen(() -> true)")
                 .build();
 
-        MethodSpec runMethod = MethodSpec
-                .methodBuilder("run")
-                .addModifiers(Modifier.PUBLIC)
-                .addParameter(Command.class, "command")
-                .addStatement("""
-                        this.manager.run(
-                        this.fromState,
-                        this.toState,
-                        command
-                        )"""
-                )
-                .build();
-
         TypeSpec type = TypeSpec
                 .classBuilder(stateToClassName)
                 .addModifiers(Modifier.PUBLIC)
-                .addField(managerField)
-                .addField(fromStateField)
-                .addField(toStateField)
+                .superclass(stateLimitedToClassName)
                 .addMethod(constructor)
                 .addMethod(whenMethod)
                 .addMethod(alwaysMethod)
-                .addMethod(runMethod)
                 .build();
 
         writeType(type);
@@ -388,20 +415,9 @@ public class StateMachineGenerator extends GenerationBase {
         List<MethodSpec> toMethods = validator.visitPermutations(new Validator.Visitor<>() {
             @Override
             public MethodSpec acceptUserDataType() {
-                CodeBlock dataParameter;
-                if (validator instanceof EnumValidator) {
-                    dataParameter = CodeBlock.of(
-                            """
-                                    return new $T(
-                                    this.manager,
-                                    this.targetState,
-                                    state
-                                    )""",
-                            stateToClassName);
-                } else if (validator instanceof RecordValidator rv) {
-                    dataParameter = CodeBlock.of("return to($T.getRecordData(state))", rv.wrappedClassName());
-                } else {
-                    throw new RuntimeException("Unknown validator type");
+                if (validator instanceof RecordValidator) {
+                    // Inside the method doesn't call this, and we don't want the user to be able to in order to avoid RobotState issues
+                    return null;
                 }
 
                 return MethodSpec
@@ -409,16 +425,25 @@ public class StateMachineGenerator extends GenerationBase {
                         .addModifiers(Modifier.PUBLIC)
                         .addParameter(validator.originalTypeName(), "state")
                         .returns(stateToClassName)
-                        .addStatement(dataParameter)
+                        .addCode("""
+                                        return new $T(
+                                        this.manager,
+                                        this.targetState,
+                                        state
+                                        );""",
+                                stateToClassName)
                         .build();
             }
 
             @Override
             public MethodSpec acceptFields(RecordValidator validator, List<ClassName> fields) {
+                var returnValue = fields.contains(robotStateName) ? stateLimitedToClassName : stateToClassName;
+                var callingMethodName = returnValue.equals(stateToClassName) ? "to" : "limitedTo";
+
                 MethodSpec.Builder methodBuilder = MethodSpec
                         .methodBuilder("to")
                         .addModifiers(Modifier.PUBLIC)
-                        .returns(stateToClassName);
+                        .returns(returnValue);
 
                 for (var type : fields) {
                     methodBuilder.addParameter(type, validator.fieldNameMap.get(type));
@@ -426,7 +451,7 @@ public class StateMachineGenerator extends GenerationBase {
 
                 CodeBlock code = CodeBlock
                         .builder()
-                        .add("return to(\n")
+                        .add("return $L(\n", callingMethodName)
                         .add(validator.emitDataClass(fields))
                         .add(");\n")
                         .build();
@@ -453,6 +478,27 @@ public class StateMachineGenerator extends GenerationBase {
                         .build();
             }
         });
+
+        if (validator instanceof RecordValidator rv && rv.robotStatePresent) {
+            var method = MethodSpec
+                    .methodBuilder("limitedTo")
+                    .addModifiers(Modifier.PRIVATE)
+                    .returns(stateLimitedToClassName)
+                    .addParameter(stateDataName, "state")
+                    .addStatement(
+                            """
+                                    return new $T(
+                                    this.manager,
+                                    this.targetState,
+                                    state
+                                    )""",
+                            stateLimitedToClassName
+                    )
+                    .build();
+
+            toMethods.add(method);
+        }
+
 
         MethodSpec triggerDefaultMethod = MethodSpec
                 .methodBuilder("trigger")
@@ -603,15 +649,24 @@ public class StateMachineGenerator extends GenerationBase {
                     });
         }
 
+        FieldSpec controlWord = null;
+        if (validator instanceof RecordValidator rv && rv.robotStatePresent) {
+            controlWord = FieldSpec
+                    .builder(ClassName.get(DSControlWord.class), "controlWord")
+                    .addModifiers(Modifier.PRIVATE, Modifier.FINAL)
+                    .initializer("new $T()", DSControlWord.class)
+                    .build();
+        }
+
         List<MethodSpec> constructors = validator.visitTopLevel(new Validator.Visitor<>() {
             @Override
             public MethodSpec acceptUserDataType() {
                 // We disallow using a record class in the constructor publicly just in case the record has a RobotState.
-                var publicOrPrivate = validator instanceof RecordValidator ? Modifier.PRIVATE : Modifier.PUBLIC;
+                var visibility = validator instanceof RecordValidator ? Modifier.PRIVATE : Modifier.PUBLIC;
 
                 return MethodSpec
                         .constructorBuilder()
-                        .addModifiers(publicOrPrivate)
+                        .addModifiers(visibility)
                         .addParameter(validator.originalTypeName(), "initialState")
                         .addStatement("this.currentState = initialState")
                         .addStatement("this.currentSubData = this.generateToSubDataStates(initialState)")
@@ -625,6 +680,11 @@ public class StateMachineGenerator extends GenerationBase {
                         .addModifiers(Modifier.PUBLIC);
 
                 for (var type : fields) {
+                    // We don't want to allow the user to include the robotState in the constructor
+                    if (type.equals(robotStateName)) {
+                        continue;
+                    }
+
                     constructorBuilder.addParameter(type, validator.fieldNameMap.get(type));
                 }
 
@@ -709,7 +769,7 @@ public class StateMachineGenerator extends GenerationBase {
             }
         });
 
-        List<MethodSpec> transitionToMethods = validator.visitPermutations(new Validator.Visitor<MethodSpec>() {
+        List<MethodSpec> transitionToMethods = validator.visitPermutations(new Validator.Visitor<>() {
             @Override
             public MethodSpec acceptUserDataType() {
                 if (validator instanceof EnumValidator) {
@@ -737,6 +797,11 @@ public class StateMachineGenerator extends GenerationBase {
 
             @Override
             public MethodSpec acceptFields(RecordValidator validator, List<ClassName> fields) {
+                if (fields.contains(robotStateName)) {
+                    // We don't want to allow the user to ever transition to a specific RobotState
+                    return null;
+                }
+
                 MethodSpec.Builder methodBuilder = MethodSpec
                         .methodBuilder("transitionTo")
                         .addModifiers(Modifier.PUBLIC)
@@ -781,9 +846,15 @@ public class StateMachineGenerator extends GenerationBase {
                         Commands.class)
                 .build();
 
-        MethodSpec pollMethod = MethodSpec
+        MethodSpec.Builder pollMethodBuilder = MethodSpec
                 .methodBuilder("poll")
-                .addModifiers(Modifier.PUBLIC)
+                .addModifiers(Modifier.PUBLIC);
+
+        if(validator instanceof RecordValidator rv && rv.robotStatePresent) {
+            pollMethodBuilder.addStatement("this.controlWord.refresh()");
+        }
+
+        pollMethodBuilder
                 .addCode("""
                                 $T nextState = this.getNextState();
                                 if(nextState == null) {
@@ -793,13 +864,35 @@ public class StateMachineGenerator extends GenerationBase {
                                 this.updateState(nextState);
                                 """,
                         stateDataName
-                )
-                .build();
+                );
 
-        MethodSpec getNextStateMethod = MethodSpec
+        MethodSpec pollMethod = pollMethodBuilder.build();
+
+        MethodSpec.Builder getNextStateMethodBuilder = MethodSpec
                 .methodBuilder("getNextState")
                 .addModifiers(Modifier.PRIVATE)
-                .returns(stateDataName)
+                .returns(stateDataName);
+
+        if (validator instanceof RecordValidator rv && rv.robotStatePresent) {
+            var fieldName = rv.fieldNameMap.get(robotStateName);
+            var subDataType = rv.fieldToInnerClass.get(List.of(robotStateName));
+
+            getNextStateMethodBuilder.addCode("""
+                    if(currentState.$1L() != RobotState.DISABLED && this.controlWord.isDisabled()) {
+                        return new $2L(RobotState.DISABLED);
+                    } else if(currentState.$1L() != RobotState.AUTO && this.controlWord.isAutonomousEnabled()) {
+                        return new $2L(RobotState.AUTO);
+                    } else if(currentState.$1L() != RobotState.TELEOP && this.controlWord.isTeleopEnabled()) {
+                        return new $2L(RobotState.TELEOP);
+                    } else if(currentState.$1L() != RobotState.TEST && this.controlWord.isTest()) {
+                        return new $2L(RobotState.TEST);
+                    }
+                    \n""",
+                    fieldName,
+                    subDataType);
+        }
+
+        getNextStateMethodBuilder
                 .addCode("""
                         for(var supplier : this.transitionWhenCache.keySet()) {
                             if(supplier.getAsBoolean()) {
@@ -809,8 +902,9 @@ public class StateMachineGenerator extends GenerationBase {
                         
                         return null;
                         """
-                )
-                .build();
+                );
+
+        MethodSpec getNextStateMethod = getNextStateMethodBuilder.build();
 
         MethodSpec.Builder updateStateMethodBuilder = MethodSpec
                 .methodBuilder("updateState")
@@ -1036,6 +1130,10 @@ public class StateMachineGenerator extends GenerationBase {
                 .addField(transitionCommandMap)
                 .addField(transitionCommandCache)
                 .addField(triggerMap);
+
+        if(controlWord != null) {
+            typeBuilder.addField(controlWord);
+        }
 
         // We want to add these boolean values to the state machine, but straight from the map they're out of order.
         innerClassEnabledFields

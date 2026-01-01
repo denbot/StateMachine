@@ -11,6 +11,7 @@ import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import java.util.List;
 import java.util.Objects;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class EnumValidator implements Validator {
@@ -75,7 +76,7 @@ public class EnumValidator implements Validator {
         // Just the main type is all that's needed here
         return Stream.of(
                 visitor.acceptUserDataType()
-        ).filter(Objects::nonNull).toList();
+        ).filter(Objects::nonNull).collect(Collectors.toList());
     }
 
     @Override
@@ -83,6 +84,6 @@ public class EnumValidator implements Validator {
         // Just the main type is all that's needed here
         return Stream.of(
                 visitor.acceptUserDataType()
-        ).filter(Objects::nonNull).toList();
+        ).filter(Objects::nonNull).collect(Collectors.toList());
     }
 }

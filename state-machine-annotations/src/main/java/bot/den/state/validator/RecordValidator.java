@@ -1,5 +1,6 @@
 package bot.den.state.validator;
 
+import bot.den.state.RobotState;
 import com.palantir.javapoet.ClassName;
 import com.palantir.javapoet.CodeBlock;
 
@@ -7,6 +8,7 @@ import javax.annotation.processing.ProcessingEnvironment;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.TypeElement;
 import java.util.*;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class RecordValidator implements Validator {
@@ -17,6 +19,8 @@ public class RecordValidator implements Validator {
     public final Map<ClassName, List<ClassName>> innerClassToField;
     private final ClassName originalTypeName;
     private final ClassName wrappedTypeName;
+    private final ClassName robotStateName;
+    public final boolean robotStatePresent;
 
     public RecordValidator(ProcessingEnvironment environment, TypeElement typeElement) {
         originalTypeName = ClassName.get(typeElement);
@@ -69,6 +73,9 @@ public class RecordValidator implements Validator {
             innerClassToField.put(nestedName, types);
             counter++;
         }
+
+        robotStateName = ClassName.get(RobotState.class);
+        robotStatePresent = fieldTypes.contains(robotStateName);
     }
 
     /**
@@ -126,14 +133,17 @@ public class RecordValidator implements Validator {
 
         return permutations;
     }
-
     public CodeBlock emitFieldNames(List<ClassName> fields) {
         CodeBlock.Builder code = CodeBlock.builder();
         for (int i = 0; i < fields.size(); i++) {
             var type = fields.get(i);
-            var name = fieldNameMap.get(type);
 
-            code.add(name);
+            if(type.equals(robotStateName)) {
+                code.add("$T.DISABLED", RobotState.class);
+            } else {
+                code.add(fieldNameMap.get(type));
+            }
+
             if (i + 1 < fields.size()) {
                 code.add(", ");
             }
@@ -172,7 +182,7 @@ public class RecordValidator implements Validator {
                         visitor.acceptWrapperDataType()
                 )
                 .filter(Objects::nonNull)
-                .toList();
+                .collect(Collectors.toList());
     }
 
     @Override
@@ -187,6 +197,6 @@ public class RecordValidator implements Validator {
 
         result.add(visitor.acceptWrapperDataType());
 
-        return result.stream().filter(Objects::nonNull).toList();
+        return result.stream().filter(Objects::nonNull).collect(Collectors.toList());
     }
 }
