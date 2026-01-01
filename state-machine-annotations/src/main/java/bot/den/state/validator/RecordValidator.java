@@ -7,7 +7,6 @@ import bot.den.state.Util;
 import bot.den.state.exceptions.InvalidStateTransition;
 import com.palantir.javapoet.*;
 
-import javax.annotation.processing.ProcessingEnvironment;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
@@ -17,55 +16,27 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class RecordValidator implements Validator {
-    private static final Map<ClassName, Integer> uniqueNameCounter = new HashMap<>();
-
     public final List<ClassName> fieldTypes;
     public final Map<ClassName, String> fieldNameMap;
-    public final List<List<ClassName>> permutations;
     public final Map<List<ClassName>, ClassName> fieldToInnerClass;
     public final Map<ClassName, List<ClassName>> innerClassToField;
     public final boolean robotStatePresent;
     public final List<TypeSpec> typesToWrite = new ArrayList<>();
+
+    // These contain the mapping between the class the user defined and our data class
     public final Map<ClassName, ClassName> nestedRecords = new HashMap<>();
+    public final Map<ClassName, ClassName> nestedInterfaces = new HashMap<>();
 
     private final ClassName originalTypeName;
     private final ClassName wrappedTypeName;
     private final ClassName robotStateName;
+    private final List<List<ClassName>> permutations;
 
     public RecordValidator(Environment environment) {
         var typeElement = environment.element();
         originalTypeName = ClassName.get(typeElement);
 
-        /*
-         It's necessary to eliminate the wrapping classes to simplify things significantly in other areas. The caveat
-         is that we must also create a unique name. While it's unlikely to cause a conflict under typical circumstances,
-         I thought it wise to avoid potential clashes, as they are technically possible. (And our unit tests are set up
-         to fail if we don't)
-        */
-        {
-            var baseClass = originalTypeName;
-            while (baseClass.enclosingClassName() != null) {
-                baseClass = baseClass.enclosingClassName();
-            }
-
-            ClassName uniqueDataClassName;
-            String specifier = "";
-            int counter = 0;
-            while (true) {
-                uniqueDataClassName = baseClass.peerClass(originalTypeName.simpleName() + specifier + "Data");
-
-                if (!uniqueNameCounter.containsKey(uniqueDataClassName)) {
-                    // Congrats, your name is unique
-                    uniqueNameCounter.put(uniqueDataClassName, counter);
-                    break;
-                }
-
-                counter++;
-                specifier = String.valueOf(counter);
-            }
-
-            wrappedTypeName = uniqueDataClassName;
-        }
+        wrappedTypeName = Util.getUniqueClassName(originalTypeName.peerClass(originalTypeName.simpleName() + "Data"));
 
         var typeUtils = environment.processingEnvironment().getTypeUtils();
 
@@ -87,28 +58,53 @@ public class RecordValidator implements Validator {
                     } else if (element.getKind() == ElementKind.RECORD) {
                         // Nested record, we have to go deeper!
                         return new RecordValidator(newEnvironment);
+                    } else if (element.getKind() == ElementKind.INTERFACE) {
+                        return new InterfaceValidator(newEnvironment);
                     } else {
                         throw new RuntimeException("Invalid type " + element.getSimpleName() + " in record " + typeElement.getSimpleName());
                     }
                 })
                 .toList();
 
-        List<RecordValidator> nestedRecordValidators = validators
-                .stream()
-                .filter(v -> v instanceof RecordValidator)
-                .map(v -> (RecordValidator) v)
-                .toList();
+        // Nested Records
+        {
+            List<RecordValidator> nestedRecordValidators = validators
+                    .stream()
+                    .filter(v -> v instanceof RecordValidator)
+                    .map(v -> (RecordValidator) v)
+                    .toList();
 
-        typesToWrite.addAll(
-                nestedRecordValidators
-                        .stream()
-                        .flatMap(v -> ((RecordValidator) v).typesToWrite.stream())
-                        .toList()
-        );
+            typesToWrite.addAll(
+                    nestedRecordValidators
+                            .stream()
+                            .flatMap(v -> v.typesToWrite.stream())
+                            .toList()
+            );
 
-        nestedRecordValidators.forEach(rv -> {
-            nestedRecords.put(rv.originalTypeName, rv.wrappedTypeName);
-        });
+            nestedRecordValidators.forEach(rv -> {
+                nestedRecords.put(rv.originalTypeName, rv.wrappedTypeName);
+            });
+        }
+
+        // Nested Interfaces
+        {
+            List<InterfaceValidator> interfaceValidators = validators
+                    .stream()
+                    .filter(v -> v instanceof InterfaceValidator)
+                    .map(v -> (InterfaceValidator) v)
+                    .toList();
+
+            typesToWrite.addAll(
+                    interfaceValidators
+                            .stream()
+                            .flatMap(v -> v.typesToWrite.stream())
+                            .toList()
+            );
+
+            interfaceValidators.forEach(iv -> {
+                nestedInterfaces.put(iv.originalTypeName(), iv.wrappedClassName());
+            });
+        }
 
         fieldTypes = validators
                 .stream()
@@ -133,6 +129,7 @@ public class RecordValidator implements Validator {
 
             fieldToInnerClass.put(types, nestedName);
             innerClassToField.put(nestedName, types);
+
             counter++;
         }
 
@@ -222,6 +219,8 @@ public class RecordValidator implements Validator {
                                 return CodeBlock.of("$T.DISABLED", RobotState.class);
                             } else if (wrapNestedClasses && nestedRecords.containsKey(type)) {
                                 return CodeBlock.of("$1T.fromRecord($2L)", nestedRecords.get(type), fieldName);
+                            } else if (wrapNestedClasses && nestedInterfaces.containsKey(type)) {
+                                return CodeBlock.of("$1T.fromRecord($2L)", nestedInterfaces.get(type), fieldName);
                             } else {
                                 return CodeBlock.of(fieldName);
                             }
@@ -321,7 +320,12 @@ public class RecordValidator implements Validator {
             for (ClassName typeName : types) {
                 // Add the type parameter to the constructor
                 String fieldName = fieldNameMap.get(typeName);
-                var dataTypeName = nestedRecords.getOrDefault(typeName, typeName);
+                var dataTypeName = typeName;
+                if (nestedRecords.containsKey(typeName)) {
+                    dataTypeName = nestedRecords.get(typeName);
+                } else if (nestedInterfaces.containsKey(typeName)) {
+                    dataTypeName = nestedInterfaces.get(typeName);
+                }
 
                 recordConstructor.addParameter(dataTypeName, fieldName);
 
@@ -370,10 +374,14 @@ public class RecordValidator implements Validator {
 
         // Next up, we need a helper method for each of the original record fields that help us with comparing if states can transition
         {
-            for (var recordEntry : fieldNameMap.entrySet()) {
-                var entryType = recordEntry.getKey();
-                var dataTypeName = nestedRecords.getOrDefault(entryType, entryType);
-                var entryName = recordEntry.getValue();
+            for (var entryType : fieldTypes) {
+                var dataTypeName = entryType;
+                if (nestedRecords.containsKey(entryType)) {
+                    dataTypeName = nestedRecords.get(entryType);
+                } else if (nestedInterfaces.containsKey(entryType)) {
+                    dataTypeName = nestedInterfaces.get(entryType);
+                }
+                var entryName = fieldNameMap.get(entryType);
 
                 MethodSpec.Builder extractorMethodBuilder = MethodSpec
                         .methodBuilder("get" + Util.ucfirst(entryName))
@@ -411,6 +419,9 @@ public class RecordValidator implements Validator {
                         if (nestedRecords.containsKey(cn)) {
                             var nestedDataType = nestedRecords.get(cn);
                             return CodeBlock.of("$1T.fromRecord(record.$2L())", nestedDataType, fieldName);
+                        } else if (nestedInterfaces.containsKey(cn)) {
+                            var nestedDataType = nestedInterfaces.get(cn);
+                            return CodeBlock.of("$1T.fromRecord(record.$2L())", nestedDataType, fieldName);
                         }
                         return CodeBlock.of("record.$1L()", fieldName);
                     })
@@ -436,6 +447,8 @@ public class RecordValidator implements Validator {
                         if (nestedRecords.containsKey(cn)) {
                             var nestedDataType = nestedRecords.get(cn);
                             return CodeBlock.of("$1T.toRecord(castData.$2L())", nestedDataType, fieldName);
+                        } else if (nestedInterfaces.containsKey(cn)) {
+                            return CodeBlock.of("castData.$1L().data()", fieldName);
                         }
                         return CodeBlock.of("castData.$1L()", fieldName);
                     })

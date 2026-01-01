@@ -59,7 +59,10 @@ public class StateMachineAnnotationProcessor extends AbstractProcessor {
 
     @Override
     public Set<String> getSupportedAnnotationTypes() {
+        /*
+         Supposedly this is necessary to ensure we see all the classes that may be implementing any interfaces we may
+         be interested in. During my testing, it didn't seem necessary, but it also doesn't seem to hurt.
+        */
         return Set.of("*");
-//        return Set.of(stateMachineAnnotationClass);
     }
 }

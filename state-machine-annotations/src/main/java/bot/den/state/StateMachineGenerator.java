@@ -811,7 +811,7 @@ public class StateMachineGenerator {
 
             var code = CodeBlock.builder();
 
-            code.add("$[var nextState = new $T($W", rv.originalTypeName());
+            code.add("$[var nextState = new $T(\n", rv.originalTypeName());
 
             List<ClassName> fieldTypes = rv.fieldTypes;
             for (int i = 0; i < fieldTypes.size(); i++) {
@@ -822,6 +822,8 @@ public class StateMachineGenerator {
                 if(rv.nestedRecords.containsKey(type)) {
                     var dataType = rv.nestedRecords.get(type);
                     otherData = CodeBlock.of("$1T.toRecord($2LData)", dataType, fieldName);
+                } else if (rv.nestedInterfaces.containsKey(type)) {
+                    otherData = CodeBlock.of("$1LData.data()", fieldName);
                 }
 
                 code.add("$1LData == null ? currentState.$1L() : $2L", fieldName, otherData);
@@ -920,8 +922,8 @@ public class StateMachineGenerator {
                         generateSubDataStateBuilder
                                 .addStatement("$1T result = new $2T<>()", subDataSetType, HashSet.class);
 
-                        rv.fieldNameMap.forEach(
-                                (className, fieldName) -> generateSubDataStateBuilder.addStatement("$1T $2LField = state.$2L()", className, fieldName)
+                        rv.fieldTypes.forEach(
+                                (className) -> generateSubDataStateBuilder.addStatement("$1T $2LField = state.$2L()", className, rv.fieldNameMap.get(className))
                         );
 
                         fieldMap
