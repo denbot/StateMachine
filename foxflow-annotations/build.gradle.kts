@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "bot.den"
-version = project.findProperty("publishingVersion") ?: "dev"
+version = project.findProperty("version") ?: "dev"
 
 repositories {
     mavenCentral()
@@ -28,7 +28,7 @@ dependencies {
 }
 
 java {
-    if (project.hasProperty("publishingVersion")) {
+    if (project.hasProperty("version")) {
         withSourcesJar()
     }
 }

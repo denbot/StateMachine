@@ -31,7 +31,7 @@ jobs:
       uses: gradle/actions/setup-gradle@v4
 
     - name: Build with Gradle
-      run: ./gradlew clean build -PpublishingVersion=${{ steps.version.outputs.version }}
+      run: ./gradlew clean build -Pversion=${{ steps.version.outputs.version }}
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
