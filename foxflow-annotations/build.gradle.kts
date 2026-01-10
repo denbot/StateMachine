@@ -12,7 +12,7 @@ repositories {
 }
 wpilibRepositories.addAllReleaseRepositories(project)
 
-val wpilibVersion = "2025.3.2"
+val wpilibVersion = "2026.1.1"
 
 dependencies {
     implementation("com.palantir.javapoet:javapoet:0.9.0")
